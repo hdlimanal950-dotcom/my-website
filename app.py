@@ -1,6 +1,6 @@
 """
 ultimate_smart_crawler_dashboard_fixed.py - نظام الزحف مع لوحة تحكم تراكمية ونظام مراقبة الأسعار التلقائية
-الإصدار: 21.1 - نظام التمويه الذكي + نظام المراقبة التلقائية
+الإصدار: 21.2 - نظام التمويه الذكي + وسيط ScraperAPI
 """
 
 # ==================== الاستيراد العام أولاً ====================
@@ -19,7 +19,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
-from urllib.parse import urlparse, parse_qs, urlencode, urljoin
+from urllib.parse import urlparse, parse_qs, urlencode, urljoin, quote
 import threading
 from threading import Lock, RLock, Thread, Event, Timer
 from typing import Dict, List, Optional, Tuple, Set, Any
@@ -34,7 +34,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 print("=" * 60)
-print("📊 نظام الزحف الذكي - لوحة التحكم التراكمية + نظام التمويه الذكي")
+print("📊 نظام الزحف الذكي - لوحة التحكم التراكمية + نظام الوسيط الذكي")
 print("=" * 60)
 print("\n📦 جاري تحميل المكتبات...")
 print("✅ المكتبات الأساسية - جاهزة")
@@ -48,6 +48,8 @@ MONITORING_CONFIG = {
     'email_notifications': True,  # ✅ تفعيل الإشعارات البريدية
     'smart_rotation': True,  # تدوير الهويات تلقائياً
     'delay_between_requests': [3, 8],  # تأخير بين الطلبات
+    'use_proxy_fallback': True,  # استخدام الوسيط عند الفشل
+    'max_retries': 3,  # عدد المحاولات
 }
 
 EMAIL_CONFIG = {
@@ -58,44 +60,66 @@ EMAIL_CONFIG = {
     'receiver_email': 'kklb1553@gmail.com',  # ✅ تم التحديث
 }
 
-# ==================== نظام التمويه الذكي لمحاكاة المتصفحات ====================
+# ==================== إعدادات الوسيط ====================
+PROXY_CONFIG = {
+    'enabled': True,
+    'primary_proxy': 'scraperapi',
+    'scraperapi_key': 'c5ff3050a86e42483899a1fff1ec4780',
+    'scraperapi_url': 'http://api.scraperapi.com',
+    'use_direct_first': True,  # المحاولة المباشرة أولاً
+    'retry_with_proxy': True,  # إعادة المحاولة بالوسيط
+    'timeout': 30,  # وقت الانتظار للوسيط
+}
+
+# ==================== نظام التمويه الذكي مع الوسيط ====================
 class SmartBrowserSimulator:
-    """محاكي متصفح ذكي للتغلب على كشف Amazon"""
+    """محاكي متصفح ذكي مع وسيط احتياطي"""
     
     def __init__(self):
         self.user_agents = [
             # Chrome على Windows
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
             
             # Chrome على Mac
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
             
             # Safari على Mac
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
             
             # Firefox
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
             
             # Edge
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
             
             # Chrome على Android (مهم: لمحاكاة الهاتف)
-            'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-            'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36',
+            'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36',
             
             # iPhone
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/120.0.0.0 Mobile/15E148 Safari/604.1',
-            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/121.0.0.0 Mobile/15E148 Safari/604.1',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
         ]
         
         self.cookies = {}
         self.session = requests.Session()
         
-        # تأخيرات طبيعية بين الطلبات
-        self.delays = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+        # إعدادات متقدمة للجلسة
+        retry_strategy = Retry(
+            total=2,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=20, pool_maxsize=20)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
         
-        print("🕵️‍♂️ نظام التمويه الذكي - جاهز")
+        # تأخيرات طبيعية بين الطلبات
+        self.delays = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5]
+        
+        print("🕵️‍♂️ نظام التمويه الذكي مع الوسيط - جاهز")
     
     def get_smart_headers(self, referer=None):
         """إرجاع رأسيات ذكية لمحاكاة المتصفح الحقيقي"""
@@ -112,7 +136,7 @@ class SmartBrowserSimulator:
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0',
-            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+            'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
             'Sec-Ch-Ua-Mobile': '?0',
             'Sec-Ch-Ua-Platform': '"Windows"',
         }
@@ -127,8 +151,10 @@ class SmartBrowserSimulator:
         delay = random.choice(self.delays)
         time.sleep(delay)
     
-    def smart_get_request(self, url, max_retries=3):
-        """طلب ذكي مع إعادة محاولة وتغيير الهوية"""
+    def smart_get_request(self, url, max_retries=3, use_proxy=True):
+        """طلب ذكي مع إعادة محاولة وتغيير الهوية والوسيط"""
+        attempts_log = []
+        
         for attempt in range(max_retries):
             try:
                 # تغيير الهوية في كل محاولة
@@ -142,30 +168,58 @@ class SmartBrowserSimulator:
                     self.cookies = {
                         'session-id': str(random.randint(1000000, 9999999)),
                         'ubid-main': str(random.randint(1000000, 9999999)),
-                        'session-token': hashlib.md5(str(time.time()).encode()).hexdigest()[:20]
+                        'session-token': hashlib.md5(str(time.time()).encode()).hexdigest()[:20],
+                        'i18n-prefs': 'USD',
+                        'sp-cdn': 'L5Z9:SA'
                     }
                 
-                response = self.session.get(
-                    url,
-                    headers=headers,
-                    cookies=self.cookies,
-                    timeout=20,
-                    allow_redirects=True,
-                    stream=False
-                )
+                # المحاولة 1: طلب مباشر (إذا كان مسموحاً)
+                if attempt == 0 or not use_proxy:
+                    response = self.session.get(
+                        url,
+                        headers=headers,
+                        cookies=self.cookies,
+                        timeout=20,
+                        allow_redirects=True,
+                        stream=False
+                    )
+                    method = "direct"
+                
+                # المحاولة 2+: استخدام الوسيط
+                else:
+                    proxy_url = self._get_proxy_url(url)
+                    if proxy_url:
+                        response = self.session.get(
+                            proxy_url,
+                            headers=headers,
+                            cookies=self.cookies,
+                            timeout=PROXY_CONFIG['timeout'],
+                            allow_redirects=True,
+                            stream=False
+                        )
+                        method = "proxy"
+                    else:
+                        continue
+                
+                # تسجيل محاولة
+                attempts_log.append({
+                    'attempt': attempt + 1,
+                    'method': method,
+                    'status': response.status_code
+                })
                 
                 # إذا كان الطلب ناجحاً
                 if response.status_code == 200:
                     # تحديث الكوكيز من الاستجابة
                     if response.cookies:
                         self.cookies.update(response.cookies.get_dict())
-                    return response
+                    return response, attempts_log
                 
                 # إذا كان هناك تحويل، اتبع الرابط الجديد
                 elif response.status_code in [301, 302, 303, 307, 308]:
                     new_url = response.headers.get('Location')
                     if new_url:
-                        return self.smart_get_request(new_url, max_retries)
+                        return self.smart_get_request(new_url, max_retries, use_proxy)
                 
                 # إذا فشل، حاول مرة أخرى مع هوية مختلفة
                 else:
@@ -173,10 +227,41 @@ class SmartBrowserSimulator:
                     self.cookies = {}
                     time.sleep(2 ** attempt)  # تأخير متزايد
                     
+            except requests.exceptions.Timeout:
+                attempts_log.append({
+                    'attempt': attempt + 1,
+                    'method': method if 'method' in locals() else 'unknown',
+                    'status': 'timeout'
+                })
+                time.sleep(2 ** attempt)
             except Exception as e:
+                attempts_log.append({
+                    'attempt': attempt + 1,
+                    'method': method if 'method' in locals() else 'unknown',
+                    'status': f'error: {str(e)[:50]}'
+                })
                 time.sleep(2 ** attempt)
         
-        return None
+        return None, attempts_log
+    
+    def _get_proxy_url(self, url):
+        """إنشاء رابط الوسيط"""
+        if not PROXY_CONFIG['enabled'] or not PROXY_CONFIG['scraperapi_key']:
+            return None
+        
+        try:
+            # تشفير الرابط
+            encoded_url = quote(url, safe='')
+            
+            # بناء رابط ScraperAPI
+            proxy_url = f"{PROXY_CONFIG['scraperapi_url']}/?api_key={PROXY_CONFIG['scraperapi_key']}&url={encoded_url}"
+            
+            # إضافة إعدادات إضافية لـ ScraperAPI
+            proxy_url += "&render=true&country_code=us&device_type=desktop"
+            
+            return proxy_url
+        except:
+            return None
 
 # ==================== إعدادات التسجيل ====================
 import logging
@@ -241,6 +326,8 @@ class EnhancedDatabase:
                     last_monitored TIMESTAMP,
                     monitoring_enabled BOOLEAN DEFAULT 1,
                     price_drop_detected BOOLEAN DEFAULT 0,
+                    extraction_method TEXT DEFAULT 'direct',  -- طريقة الاستخلاص
+                    last_extraction_status TEXT DEFAULT 'success',
                     CHECK (length(asin) = 10),
                     CHECK (discount_percentage >= 0 AND discount_percentage <= 100)
                 )
@@ -254,6 +341,7 @@ class EnhancedDatabase:
                     price REAL NOT NULL,
                     reference_price REAL,
                     discount_percentage REAL,
+                    extraction_method TEXT DEFAULT 'direct',
                     captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (asin) REFERENCES dashboard_products (asin) ON DELETE CASCADE
                 )
@@ -268,6 +356,7 @@ class EnhancedDatabase:
                     old_value TEXT,
                     new_value TEXT,
                     discount_change REAL DEFAULT 0.0,
+                    extraction_method TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -294,6 +383,7 @@ class EnhancedDatabase:
                     old_price REAL NOT NULL,
                     new_price REAL NOT NULL,
                     drop_percentage REAL NOT NULL,
+                    extraction_method TEXT DEFAULT 'direct',
                     alert_sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     notified_email TEXT,
                     FOREIGN KEY (asin) REFERENCES dashboard_products (asin) ON DELETE CASCADE
@@ -308,9 +398,24 @@ class EnhancedDatabase:
                     old_price REAL,
                     new_price REAL,
                     price_change REAL,
+                    extraction_method TEXT,
                     status TEXT,
                     message TEXT,
                     monitored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # ============ جدول إحصائيات الاستخلاص ============
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS extraction_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date DATE UNIQUE DEFAULT CURRENT_DATE,
+                    total_attempts INTEGER DEFAULT 0,
+                    direct_success INTEGER DEFAULT 0,
+                    proxy_success INTEGER DEFAULT 0,
+                    failed_attempts INTEGER DEFAULT 0,
+                    success_rate REAL DEFAULT 0.0,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -331,6 +436,8 @@ class EnhancedDatabase:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_stats_date ON display_stats(created_date DESC)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_alerts_time ON price_alerts(alert_sent_at DESC)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_monitoring_time ON monitoring_logs(monitored_at DESC)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_extraction_method ON dashboard_products(extraction_method)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_extraction_stats_date ON extraction_stats(date DESC)')
                 conn.commit()
             except Exception as e:
                 print(f"⚠️  تحذير في إنشاء الفهارس: {e}")
@@ -357,7 +464,8 @@ class EnhancedDatabase:
             
             # التحقق من الأعمدة المطلوبة
             required_columns = [
-                'initial_price', 'monitoring_enabled', 'price_drop_detected', 'last_monitored'
+                'initial_price', 'monitoring_enabled', 'price_drop_detected', 
+                'last_monitored', 'extraction_method', 'last_extraction_status'
             ]
             
             for col in required_columns:
@@ -375,6 +483,10 @@ class EnhancedDatabase:
                         cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} BOOLEAN DEFAULT 0')
                     elif col == 'last_monitored':
                         cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} TIMESTAMP')
+                    elif col == 'extraction_method':
+                        cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} TEXT DEFAULT "direct"')
+                    elif col == 'last_extraction_status':
+                        cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} TEXT DEFAULT "success"')
                     print(f"✅ تمت إضافة العمود المفقود: {col}")
                 except Exception as e:
                     print(f"⚠️  تحذير في إضافة العمود {col}: {e}")
@@ -383,7 +495,7 @@ class EnhancedDatabase:
             print(f"⚠️  تحذير في التحقق من الأعمدة المفقودة: {e}")
     
     def save_or_update_product(self, product_data: Dict) -> bool:
-        """حفظ أو تحديث منتج مع تتبع الخصومات والتغيرات"""
+        """حفظ أو تحديث منتج مع تتبع الخصومات والتغيرات وطريقة الاستخلاص"""
         conn = None
         try:
             conn = self.get_connection()
@@ -396,6 +508,7 @@ class EnhancedDatabase:
             current_price = product_data.get('current_price', 0.0)
             reference_price = product_data.get('reference_price', 0.0)
             discount_percentage = product_data.get('discount_percentage', 0.0)
+            extraction_method = product_data.get('extraction_method', 'direct')
             
             # التحقق مما إذا كان المنتج موجوداً
             cursor.execute('''
@@ -420,7 +533,9 @@ class EnhancedDatabase:
                         source_url = COALESCE(?, source_url),
                         category = COALESCE(?, category),
                         price_change_count = price_change_count + ?,
-                        price_drop_detected = 0  -- إعادة ضغط كاشف الانخفاض
+                        price_drop_detected = 0,  -- إعادة ضغط كاشف الانخفاض
+                        extraction_method = ?,
+                        last_extraction_status = 'success'
                     WHERE asin = ?
                 ''', (
                     product_data.get('product_name'),
@@ -432,6 +547,7 @@ class EnhancedDatabase:
                     product_data.get('source_url'),
                     product_data.get('category', 'غير مصنف'),
                     1 if abs(old_price - current_price) > 0.01 else 0,
+                    extraction_method,
                     asin
                 ))
                 
@@ -445,15 +561,16 @@ class EnhancedDatabase:
                 
                 # تسجيل حدث التحديث
                 if abs(old_price - current_price) > 0.01:
-                    self._log_update_event('price_change', asin, str(old_price), str(current_price), discount_percentage - old_discount)
+                    self._log_update_event('price_change', asin, str(old_price), str(current_price), 
+                                         discount_percentage - old_discount, extraction_method)
                 
             else:
                 # إضافة منتج جديد مع تعيين السعر الأولي
                 cursor.execute('''
                     INSERT INTO dashboard_products 
                     (asin, product_name, current_price, reference_price, discount_percentage, 
-                     currency, availability_status, source_url, category, initial_price)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     currency, availability_status, source_url, category, initial_price, extraction_method)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     asin,
                     product_data.get('product_name', f'منتج {asin}'),
@@ -464,22 +581,24 @@ class EnhancedDatabase:
                     product_data.get('availability_status', 'active'),
                     product_data.get('source_url'),
                     product_data.get('category', 'غير مصنف'),
-                    current_price  # السعر الأولي
+                    current_price,  # السعر الأولي
+                    extraction_method
                 ))
                 
-                self._log_update_event('new_product', asin, None, product_data.get('product_name', asin), discount_percentage)
+                self._log_update_event('new_product', asin, None, product_data.get('product_name', asin), 
+                                     discount_percentage, extraction_method)
             
             # حفظ في تاريخ الأسعار
             if current_price > 0:
                 cursor.execute('''
-                    INSERT INTO price_history (asin, price, reference_price, discount_percentage)
-                    VALUES (?, ?, ?, ?)
-                ''', (asin, current_price, reference_price, discount_percentage))
+                    INSERT INTO price_history (asin, price, reference_price, discount_percentage, extraction_method)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (asin, current_price, reference_price, discount_percentage, extraction_method))
             
             conn.commit()
             self._update_display_stats()
             
-            logger.info(f"📊 تم تحديث المنتج: {asin} (السعر: ${current_price:.2f})")
+            logger.info(f"📊 تم تحديث المنتج: {asin} (السعر: ${current_price:.2f}, الطريقة: {extraction_method})")
             return True
             
         except sqlite3.Error as e:
@@ -493,6 +612,134 @@ class EnhancedDatabase:
                 conn.rollback()
             return False
     
+    def update_extraction_status(self, asin: str, status: str, method: str = None):
+        """تحديث حالة الاستخلاص للمنتج"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            if method:
+                cursor.execute('''
+                    UPDATE dashboard_products 
+                    SET last_extraction_status = ?, extraction_method = ?, last_updated = CURRENT_TIMESTAMP
+                    WHERE asin = ?
+                ''', (status, method, asin))
+            else:
+                cursor.execute('''
+                    UPDATE dashboard_products 
+                    SET last_extraction_status = ?, last_updated = CURRENT_TIMESTAMP
+                    WHERE asin = ?
+                ''', (status, asin))
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ خطأ في تحديث حالة الاستخلاص: {e}")
+    
+    def log_extraction_stat(self, success: bool, method: str = 'direct'):
+        """تسجيل إحصائية استخلاص"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            today = datetime.now().date().isoformat()
+            
+            # التحقق من وجود سجل اليوم
+            cursor.execute('SELECT id, total_attempts, direct_success, proxy_success FROM extraction_stats WHERE date = ?', (today,))
+            row = cursor.fetchone()
+            
+            if row:
+                stat_id, total_attempts, direct_success, proxy_success = row
+                total_attempts += 1
+                
+                if success:
+                    if method == 'direct':
+                        direct_success += 1
+                    elif method == 'proxy':
+                        proxy_success += 1
+                
+                failed_attempts = total_attempts - (direct_success + proxy_success)
+                success_rate = ((direct_success + proxy_success) / total_attempts * 100) if total_attempts > 0 else 0
+                
+                cursor.execute('''
+                    UPDATE extraction_stats 
+                    SET total_attempts = ?, direct_success = ?, proxy_success = ?, 
+                        failed_attempts = ?, success_rate = ?, last_updated = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (total_attempts, direct_success, proxy_success, failed_attempts, success_rate, stat_id))
+            else:
+                total_attempts = 1
+                direct_success = 1 if success and method == 'direct' else 0
+                proxy_success = 1 if success and method == 'proxy' else 0
+                failed_attempts = 0 if success else 1
+                success_rate = 100 if success else 0
+                
+                cursor.execute('''
+                    INSERT INTO extraction_stats 
+                    (date, total_attempts, direct_success, proxy_success, failed_attempts, success_rate)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (today, total_attempts, direct_success, proxy_success, failed_attempts, success_rate))
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ خطأ في تسجيل إحصائية الاستخلاص: {e}")
+    
+    def get_extraction_stats(self) -> Dict:
+        """الحصول على إحصائيات الاستخلاص"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT date, total_attempts, direct_success, proxy_success, 
+                       failed_attempts, success_rate, last_updated
+                FROM extraction_stats 
+                ORDER BY date DESC 
+                LIMIT 7
+            ''')
+            
+            stats = []
+            for row in cursor.fetchall():
+                stats.append({
+                    'date': row[0],
+                    'total_attempts': row[1],
+                    'direct_success': row[2],
+                    'proxy_success': row[3],
+                    'failed_attempts': row[4],
+                    'success_rate': row[5],
+                    'last_updated': row[6]
+                })
+            
+            # الإحصائيات الإجمالية
+            cursor.execute('''
+                SELECT 
+                    SUM(total_attempts) as total_attempts,
+                    SUM(direct_success) as total_direct_success,
+                    SUM(proxy_success) as total_proxy_success,
+                    SUM(failed_attempts) as total_failed_attempts,
+                    AVG(success_rate) as avg_success_rate
+                FROM extraction_stats 
+                WHERE date >= DATE('now', '-7 days')
+            ''')
+            
+            row = cursor.fetchone()
+            
+            return {
+                'recent_stats': stats,
+                'summary': {
+                    'total_attempts': row[0] if row[0] else 0,
+                    'total_direct_success': row[1] if row[1] else 0,
+                    'total_proxy_success': row[2] if row[2] else 0,
+                    'total_failed_attempts': row[3] if row[3] else 0,
+                    'avg_success_rate': round(row[4], 2) if row[4] else 0,
+                    'direct_success_rate': round((row[1] / row[0] * 100), 2) if row[0] and row[0] > 0 else 0,
+                    'proxy_success_rate': round((row[2] / row[0] * 100), 2) if row[0] and row[0] > 0 else 0
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب إحصائيات الاستخلاص: {e}")
+            return {'recent_stats': [], 'summary': {}}
+    
     def get_products_for_monitoring(self, limit: int = 50) -> List[Dict]:
         """الحصول على المنتجات للمراقبة"""
         try:
@@ -500,14 +747,22 @@ class EnhancedDatabase:
             cursor = conn.cursor()
             
             # جلب المنتجات النشطة التي تم تفعيل المراقبة لها
+            # مع إعطاء الأولوية للمنتجات التي فشل استخلاصها مؤخراً
             cursor.execute('''
                 SELECT asin, product_name, current_price, initial_price, source_url, 
-                       last_monitored, monitoring_enabled
+                       last_monitored, monitoring_enabled, extraction_method, last_extraction_status
                 FROM dashboard_products
                 WHERE availability_status = 'active' 
                 AND monitoring_enabled = 1
                 AND current_price > 0
-                ORDER BY last_monitored ASC NULLS FIRST, last_updated DESC
+                ORDER BY 
+                    CASE 
+                        WHEN last_extraction_status = 'failed' THEN 1
+                        WHEN extraction_method = 'proxy' THEN 2
+                        ELSE 3
+                    END,
+                    last_monitored ASC NULLS FIRST, 
+                    last_updated DESC
                 LIMIT ?
             ''', (limit,))
             
@@ -517,10 +772,12 @@ class EnhancedDatabase:
                     'asin': row[0],
                     'product_name': row[1],
                     'current_price': row[2],
-                    'initial_price': row[3] if row[3] else row[2],  # إذا لم يكن هناك سعر أولي، استخدم السعر الحالي
+                    'initial_price': row[3] if row[3] else row[2],
                     'source_url': row[4] or f"https://www.amazon.com/dp/{row[0]}",
                     'last_monitored': row[5],
-                    'monitoring_enabled': bool(row[6])
+                    'monitoring_enabled': bool(row[6]),
+                    'extraction_method': row[7] or 'direct',
+                    'last_extraction_status': row[8] or 'success'
                 })
             
             return products
@@ -545,24 +802,28 @@ class EnhancedDatabase:
         except Exception as e:
             logger.error(f"❌ خطأ في تحديث وقت المراقبة: {e}")
     
-    def add_price_alert(self, asin: str, old_price: float, new_price: float, drop_percentage: float):
+    def add_price_alert(self, asin: str, old_price: float, new_price: float, 
+                       drop_percentage: float, extraction_method: str = 'direct'):
         """إضافة تنبيه انخفاض السعر"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT INTO price_alerts (asin, old_price, new_price, drop_percentage, notified_email)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (asin, old_price, new_price, drop_percentage, EMAIL_CONFIG['receiver_email']))
+                INSERT INTO price_alerts (asin, old_price, new_price, drop_percentage, 
+                                        extraction_method, notified_email)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (asin, old_price, new_price, drop_percentage, 
+                 extraction_method, EMAIL_CONFIG['receiver_email']))
             
             conn.commit()
-            logger.info(f"⚠️  تم تسجيل تنبيه انخفاض السعر لـ {asin}: {drop_percentage:.1f}%")
+            logger.info(f"⚠️  تم تسجيل تنبيه انخفاض السعر لـ {asin}: {drop_percentage:.1f}% (الطريقة: {extraction_method})")
             
         except Exception as e:
             logger.error(f"❌ خطأ في تسجيل تنبيه السعر: {e}")
     
-    def add_monitoring_log(self, asin: str, old_price: float, new_price: float, status: str, message: str = ""):
+    def add_monitoring_log(self, asin: str, old_price: float, new_price: float, 
+                          status: str, message: str = "", extraction_method: str = None):
         """إضافة سجل مراقبة"""
         try:
             conn = self.get_connection()
@@ -571,9 +832,10 @@ class EnhancedDatabase:
             price_change = new_price - old_price if old_price and new_price else 0
             
             cursor.execute('''
-                INSERT INTO monitoring_logs (asin, old_price, new_price, price_change, status, message)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (asin, old_price, new_price, price_change, status, message))
+                INSERT INTO monitoring_logs (asin, old_price, new_price, price_change, 
+                                           extraction_method, status, message)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (asin, old_price, new_price, price_change, extraction_method, status, message))
             
             conn.commit()
         except Exception as e:
@@ -603,7 +865,7 @@ class EnhancedDatabase:
             
             cursor.execute('''
                 SELECT pa.asin, dp.product_name, pa.old_price, pa.new_price, 
-                       pa.drop_percentage, pa.alert_sent_at
+                       pa.drop_percentage, pa.alert_sent_at, pa.extraction_method
                 FROM price_alerts pa
                 LEFT JOIN dashboard_products dp ON pa.asin = dp.asin
                 ORDER BY pa.alert_sent_at DESC
@@ -619,6 +881,7 @@ class EnhancedDatabase:
                     'new_price': row[3],
                     'drop_percentage': row[4],
                     'alert_sent_at': row[5],
+                    'extraction_method': row[6] or 'direct',
                     'savings': row[2] - row[3] if row[2] and row[3] else 0
                 })
             
@@ -640,7 +903,9 @@ class EnhancedDatabase:
                     COUNT(*) as total_monitored,
                     COUNT(CASE WHEN price_drop_detected = 1 THEN 1 END) as drops_detected,
                     COUNT(CASE WHEN last_monitored IS NOT NULL THEN 1 END) as recently_monitored,
-                    AVG(current_price) as avg_price
+                    AVG(current_price) as avg_price,
+                    COUNT(CASE WHEN extraction_method = 'proxy' THEN 1 END) as proxy_used,
+                    COUNT(CASE WHEN last_extraction_status = 'failed' THEN 1 END) as failed_extractions
                 FROM dashboard_products 
                 WHERE monitoring_enabled = 1 AND availability_status = 'active'
             ''')
@@ -656,15 +921,21 @@ class EnhancedDatabase:
             
             alerts_row = cursor.fetchone()
             
+            # إحصائيات الاستخلاص
+            extraction_stats = self.get_extraction_stats()
+            
             return {
                 'total_monitored': row[0] if row else 0,
                 'drops_detected': row[1] if row else 0,
                 'recently_monitored': row[2] if row else 0,
                 'avg_price': round(row[3], 2) if row and row[3] else 0.0,
+                'proxy_used': row[4] if row else 0,
+                'failed_extractions': row[5] if row else 0,
                 'alerts_today': alerts_row[0] if alerts_row else 0,
                 'last_alert': alerts_row[1] if alerts_row and alerts_row[1] else None,
                 'monitoring_enabled': MONITORING_CONFIG['enabled'],
-                'next_monitoring': self._calculate_next_monitoring_time()
+                'next_monitoring': self._calculate_next_monitoring_time(),
+                'extraction_stats': extraction_stats['summary']
             }
             
         except Exception as e:
@@ -679,16 +950,19 @@ class EnhancedDatabase:
         next_time = datetime.now() + timedelta(seconds=MONITORING_CONFIG['interval'])
         return next_time.strftime("%H:%M:%S")
     
-    def _log_update_event(self, event_type: str, asin: str, old_value: str = None, new_value: str = None, discount_change: float = 0.0):
+    def _log_update_event(self, event_type: str, asin: str, old_value: str = None, 
+                         new_value: str = None, discount_change: float = 0.0, 
+                         extraction_method: str = None):
         """تسجيل حدث تحديث"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT INTO update_events (event_type, asin, old_value, new_value, discount_change)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (event_type, asin, old_value, new_value, discount_change))
+                INSERT INTO update_events (event_type, asin, old_value, new_value, 
+                                         discount_change, extraction_method)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (event_type, asin, old_value, new_value, discount_change, extraction_method))
             
             conn.commit()
         except Exception as e:
@@ -742,7 +1016,8 @@ class EnhancedDatabase:
             cursor.execute('''
                 SELECT asin, product_name, current_price, reference_price, discount_percentage,
                        currency, availability_status, last_updated, source_url, category,
-                       price_change_count, initial_price, monitoring_enabled, price_drop_detected
+                       price_change_count, initial_price, monitoring_enabled, price_drop_detected,
+                       extraction_method, last_extraction_status
                 FROM dashboard_products
                 ORDER BY last_updated DESC
                 LIMIT ? OFFSET ?
@@ -765,6 +1040,8 @@ class EnhancedDatabase:
                     'initial_price': row[11],
                     'monitoring_enabled': bool(row[12]) if row[12] is not None else True,
                     'price_drop_detected': bool(row[13]) if row[13] is not None else False,
+                    'extraction_method': row[14] or 'direct',
+                    'last_extraction_status': row[15] or 'success',
                     'has_discount': row[3] and row[3] > row[2] and row[2] > 0
                 })
             
@@ -786,7 +1063,8 @@ class EnhancedDatabase:
                     COUNT(CASE WHEN availability_status = 'active' THEN 1 END) as active,
                     COUNT(CASE WHEN availability_status = 'out_of_stock' THEN 1 END) as out_of_stock,
                     COUNT(CASE WHEN availability_status = 'discontinued' THEN 1 END) as discontinued,
-                    COUNT(CASE WHEN monitoring_enabled = 1 THEN 1 END) as monitored
+                    COUNT(CASE WHEN monitoring_enabled = 1 THEN 1 END) as monitored,
+                    COUNT(CASE WHEN extraction_method = 'proxy' THEN 1 END) as proxy_used
                 FROM dashboard_products
             ''')
             
@@ -796,7 +1074,8 @@ class EnhancedDatabase:
                 'active': row[1] if row else 0,
                 'out_of_stock': row[2] if row else 0,
                 'discontinued': row[3] if row else 0,
-                'monitored': row[4] if row else 0
+                'monitored': row[4] if row else 0,
+                'proxy_used': row[5] if row else 0
             }
             
         except Exception as e:
@@ -813,7 +1092,7 @@ class EnhancedDatabase:
             
             cursor.execute('''
                 SELECT asin, product_name, current_price, reference_price, discount_percentage,
-                       currency, availability_status, last_updated, category
+                       currency, availability_status, last_updated, category, extraction_method
                 FROM dashboard_products
                 WHERE asin LIKE ? OR product_name LIKE ? OR category LIKE ?
                 ORDER BY last_updated DESC
@@ -832,6 +1111,7 @@ class EnhancedDatabase:
                     'availability_status': row[6],
                     'last_updated': row[7],
                     'category': row[8] or 'غير مصنف',
+                    'extraction_method': row[9] or 'direct',
                     'has_discount': row[3] and row[3] > row[2] and row[2] > 0
                 })
             
@@ -849,7 +1129,7 @@ class EnhancedDatabase:
             
             cursor.execute('''
                 SELECT asin, product_name, current_price, reference_price, discount_percentage,
-                       currency, last_updated, category
+                       currency, last_updated, category, extraction_method
                 FROM dashboard_products
                 WHERE discount_percentage >= ? AND current_price > 0 AND availability_status = 'active'
                 ORDER BY discount_percentage DESC, current_price ASC
@@ -866,7 +1146,8 @@ class EnhancedDatabase:
                     'discount_percentage': row[4],
                     'currency': row[5],
                     'last_updated': row[6],
-                    'category': row[7] or 'غير مصنف'
+                    'category': row[7] or 'غير مصنف',
+                    'extraction_method': row[8] or 'direct'
                 })
             
             return deals
@@ -890,10 +1171,11 @@ class EmailNotifier:
     
     @staticmethod
     def send_price_drop_alert(asin: str, product_name: str, old_price: float, 
-                            new_price: float, drop_percentage: float, product_url: str = None):
+                            new_price: float, drop_percentage: float, 
+                            product_url: str = None, extraction_method: str = 'direct'):
         """إرسال إشعار انخفاض السعر"""
         if not MONITORING_CONFIG['email_notifications']:
-            print(f"📧 (محاكاة) إشعار انخفاض السعر لـ {asin}: {drop_percentage:.1f}%")
+            print(f"📧 (محاكاة) إشعار انخفاض السعر لـ {asin}: {drop_percentage:.1f}% (الطريقة: {extraction_method})")
             return True
         
         try:
@@ -913,6 +1195,8 @@ class EmailNotifier:
             
             📉 نسبة الانخفاض: {drop_percentage:.1f}%
             💵 التوفير: ${old_price - new_price:.2f}
+            
+            🛠️  طريقة الاستخلاص: {extraction_method}
             
             🔗 رابط المنتج: {product_url or f"https://www.amazon.com/dp/{asin}"}
             
@@ -949,6 +1233,11 @@ class EmailNotifier:
                     <div style="background: #4caf50; color: white; padding: 15px; border-radius: 8px; 
                                 text-align: center; font-size: 1.2rem; margin: 15px 0;">
                         💵 توفير: ${old_price - new_price:.2f}
+                    </div>
+                    
+                    <div style="background: #2196f3; color: white; padding: 10px; border-radius: 8px; 
+                                text-align: center; font-size: 0.9rem; margin: 10px 0;">
+                        🛠️  طريقة الاستخلاص: {extraction_method}
                     </div>
                     
                     <p>
@@ -999,7 +1288,8 @@ class EmailNotifier:
             return True
     
     @staticmethod
-    def send_monitoring_summary(monitored_count: int, alerts_count: int, drops_detected: int):
+    def send_monitoring_summary(monitored_count: int, alerts_count: int, drops_detected: int,
+                               extraction_stats: Dict = None):
         """إرسال ملخص المراقبة"""
         if not MONITORING_CONFIG['email_notifications']:
             print(f"📧 (محاكاة) ملخص المراقبة: {monitored_count} منتج، {drops_detected} انخفاضات")
@@ -1008,6 +1298,18 @@ class EmailNotifier:
         try:
             # تنظيف كلمة المرور من المسافات
             cleaned_password = EMAIL_CONFIG['sender_password'].replace(' ', '')
+            
+            # إضافة إحصائيات الاستخلاص إذا موجودة
+            extraction_info = ""
+            if extraction_stats:
+                extraction_info = f"""
+                
+            📊 إحصائيات الاستخلاص:
+            • إجمالي المحاولات: {extraction_stats.get('total_attempts', 0)}
+            • نجاح مباشر: {extraction_stats.get('total_direct_success', 0)}
+            • نجاح بالوسيط: {extaration_stats.get('total_proxy_success', 0)}
+            • نسبة النجاح: {extraction_stats.get('avg_success_rate', 0)}%
+            """
             
             subject = f"📊 ملخص مراقبة الأسعار - {datetime.now().strftime('%Y-%m-%d')}"
             body = f"""
@@ -1020,8 +1322,9 @@ class EmailNotifier:
             • عدد المنتجات التي تمت زيارتها: {monitored_count}
             • عدد التنبيهات المكتشفة: {alerts_count}
             • عدد الانخفاضات الكبيرة: {drops_detected}
+            {extraction_info}
             
-            تمت المراقبة تلقائياً بواسطة النظام.
+            تمت المراقبة تلقائياً بواسطة النظام مع الوسيط الذكي.
             """
             
             msg = MIMEText(body, 'plain')
@@ -1043,33 +1346,33 @@ class EmailNotifier:
             print(f"📧 (محاكاة) ملخص المراقبة: {monitored_count} منتج، {drops_detected} انخفاضات")
             return True
 
-# ==================== نظام استخلاص مع التمويه الذكي ====================
+# ==================== نظام استخلاص مع الوسيط الذكي ====================
 class DiscountAwareAmazonExtractor:
-    """مستخلص ذكي مع تتبع الأسعار المرجعية والخصومات"""
+    """مستخلص ذكي مع تتبع الأسعار المرجعية والخصومات والوسيط"""
     
     def __init__(self):
         try:
             import fake_useragent
             
-            # إضافة المدير الذكي
+            # إضافة المدير الذكي مع الوسيط
             self.browser_simulator = SmartBrowserSimulator()
             
             # الحفاظ على الجلسة القديمة للتوافق
             self.session = requests.Session()
             
             retry_strategy = Retry(
-                total=2,  # قلل المحاولات لأن لدينا نظام ذكي
+                total=2,
                 backoff_factor=1,
                 status_forcelist=[429, 500, 502, 503, 504],
                 allowed_methods=["GET"]
             )
-            adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+            adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=20, pool_maxsize=20)
             self.session.mount("http://", adapter)
             self.session.mount("https://", adapter)
             
             self.ua_generator = fake_useragent.UserAgent()
             
-            print("✅ مكتبات الاستخلاص - جاهزة مع نظام التمويه الذكي")
+            print("✅ مكتبات الاستخلاص - جاهزة مع الوسيط الذكي")
         except ImportError as e:
             print(f"⚠️  خطأ في استيراد مكتبات الاستخلاص: {e}")
             self.session = None
@@ -1096,22 +1399,66 @@ class DiscountAwareAmazonExtractor:
         
         return None
     
-    def extract_price(self, url: str) -> Tuple[Optional[Dict], str]:
+    def extract_price(self, url: str) -> Tuple[Optional[Dict], str, str]:
         """استخلاص السعر مع تتبع الأسعار المرجعية والخصومات"""
+        extraction_method = "direct"
+        attempts_log = []
+        
         try:
             if not self.session:
-                return None, "مكتبات الاستخلاص غير مثبتة"
+                return None, "مكتبات الاستخلاص غير مثبتة", extraction_method
             
             if 'amazon.com' not in url.lower():
-                return None, "النظام يدعم Amazon.com فقط"
+                return None, "النظام يدعم Amazon.com فقط", extraction_method
             
             asin = self.extract_asin_from_url(url)
             if not asin:
-                return None, "لم يتم العثور على ASIN في الرابط"
+                return None, "لم يتم العثور على ASIN في الرابط", extraction_method
             
-            # محاولة 1: استخدام النظام الذكي (المفضلة)
+            # المحاولة 1: الاستخلاص المباشر (إذا كان مفعلاً)
+            if PROXY_CONFIG.get('use_direct_first', True):
+                logger.info(f"🔍 المحاولة 1: استخلاص مباشر لـ {asin}")
+                
+                headers = self._get_global_headers()
+                parsed_url = urlparse(url)
+                headers['Referer'] = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                
+                # تأخير عشوائي قبل المحاولة
+                time.sleep(random.uniform(2, 4))
+                
+                try:
+                    response = self.session.get(
+                        url, 
+                        headers=headers, 
+                        timeout=20, 
+                        allow_redirects=True
+                    )
+                    
+                    if response.status_code == 200:
+                        html_content = response.text
+                        product_data = self._extract_with_discount_awareness(html_content, asin)
+                        
+                        if product_data:
+                            product_data['url'] = url
+                            extraction_method = "direct"
+                            logger.info(f"✅ نجاح الاستخلاص المباشر لـ {asin}")
+                            return product_data, "تم الاستخلاص بنجاح (مباشر)", extraction_method
+                    else:
+                        logger.warning(f"⚠️  فشل مباشر لـ {asin}: {response.status_code}")
+                        attempts_log.append(f"مباشر: {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"⚠️  خطأ في الاستخلاص المباشر لـ {asin}: {str(e)[:100]}")
+                    attempts_log.append(f"مباشر خطأ: {str(e)[:50]}")
+            
+            # المحاولة 2: استخدام النظام الذكي
             if self.browser_simulator:
-                response = self.browser_simulator.smart_get_request(url)
+                logger.info(f"🔍 المحاولة 2: استخلاص ذكي لـ {asin}")
+                
+                response, smart_attempts = self.browser_simulator.smart_get_request(
+                    url, 
+                    max_retries=2,
+                    use_proxy=False
+                )
                 
                 if response and response.status_code == 200:
                     html_content = response.text
@@ -1119,53 +1466,82 @@ class DiscountAwareAmazonExtractor:
                     
                     if product_data:
                         product_data['url'] = url
-                        return product_data, "تم الاستخلاص بنجاح (النظام الذكي)"
+                        extraction_method = "smart"
+                        logger.info(f"✅ نجاح الاستخلاص الذكي لـ {asin}")
+                        return product_data, "تم الاستخلاص بنجاح (ذكي)", extraction_method
+                else:
+                    logger.warning(f"⚠️  فشل ذكي لـ {asin}")
+                    attempts_log.extend([f"ذكي: {a['status']}" for a in smart_attempts])
             
-            # محاولة 2: الطريقة القديمة (الاحتياطية)
-            headers = self._get_global_headers()
-            parsed_url = urlparse(url)
-            headers['Referer'] = f"{parsed_url.scheme}://{parsed_url.netloc}/"
-            
-            # تأخير عشوائي قبل المحاولة الثانية
-            time.sleep(random.uniform(2, 4))
-            
-            response = self.session.get(url, headers=headers, timeout=20, allow_redirects=True)
-            
-            if response.status_code != 200:
-                if response.status_code == 503:
-                    # تجربة هوية مختلفة
-                    headers['User-Agent'] = random.choice([
-                        'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-                        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-                    ])
-                    response = self.session.get(url, headers=headers, timeout=20)
+            # المحاولة 3: استخدام الوسيط (ScraperAPI)
+            if PROXY_CONFIG.get('retry_with_proxy', True) and PROXY_CONFIG.get('scraperapi_key'):
+                logger.info(f"🔍 المحاولة 3: استخلاص بالوسيط لـ {asin}")
                 
-                if response.status_code != 200:
-                    return None, f"فشل جلب الصفحة: {response.status_code}"
+                proxy_url = self._get_proxy_url(url)
+                if proxy_url:
+                    try:
+                        headers = self._get_global_headers()
+                        time.sleep(random.uniform(3, 6))
+                        
+                        response = self.session.get(
+                            proxy_url,
+                            headers=headers,
+                            timeout=PROXY_CONFIG['timeout'],
+                            allow_redirects=True
+                        )
+                        
+                        if response.status_code == 200:
+                            html_content = response.text
+                            product_data = self._extract_with_discount_awareness(html_content, asin)
+                            
+                            if product_data:
+                                product_data['url'] = url
+                                extraction_method = "proxy"
+                                logger.info(f"✅ نجاح الاستخلاص بالوسيط لـ {asin}")
+                                return product_data, "تم الاستخلاص بنجاح (وسيط)", extraction_method
+                        else:
+                            logger.warning(f"⚠️  فشل وسيط لـ {asin}: {response.status_code}")
+                            attempts_log.append(f"وسيط: {response.status_code}")
+                    except Exception as e:
+                        logger.warning(f"⚠️  خطأ في الاستخلاص بالوسيط لـ {asin}: {str(e)[:100]}")
+                        attempts_log.append(f"وسيط خطأ: {str(e)[:50]}")
             
-            html_content = response.text
-            product_data = self._extract_with_discount_awareness(html_content, asin)
-            
-            if product_data:
-                product_data['url'] = url
-                return product_data, "تم الاستخلاص بنجاح"
-            else:
-                return None, "فشل استخلاص البيانات من الصفحة"
+            # جميع المحاولات فشلت
+            error_msg = f"فشل جميع طرق الاستخلاص. المحاولات: {', '.join(attempts_log)}"
+            logger.error(f"❌ {error_msg}")
+            return None, error_msg, "failed"
             
         except Exception as e:
-            logger.error(f"خطأ في الاستخلاص: {str(e)[:200]}")
-            return None, f"خطأ في الاستخلاص: {str(e)[:100]}"
+            error_msg = f"خطأ عام في الاستخلاص: {str(e)[:200]}"
+            logger.error(f"❌ {error_msg}")
+            return None, error_msg, extraction_method
+    
+    def _get_proxy_url(self, url):
+        """إنشاء رابط الوسيط"""
+        if not PROXY_CONFIG.get('scraperapi_key'):
+            return None
+        
+        try:
+            encoded_url = quote(url, safe='')
+            proxy_url = f"{PROXY_CONFIG['scraperapi_url']}/?api_key={PROXY_CONFIG['scraperapi_key']}&url={encoded_url}"
+            
+            # إضافة إعدادات متقدمة لـ ScraperAPI
+            proxy_url += "&render=true&country_code=us&device_type=desktop&session_number=1"
+            
+            return proxy_url
+        except:
+            return None
     
     def _get_global_headers(self) -> Dict:
         """إرجاع رأسيات موحدة"""
         try:
-            user_agent = self.ua_generator.random if self.ua_generator else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            user_agent = self.ua_generator.random if self.ua_generator else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         except:
-            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
         
         return {
             'User-Agent': user_agent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
@@ -1219,6 +1595,8 @@ class DiscountAwareAmazonExtractor:
                 (r'<span[^>]*class="apexPriceToPay"[^>]*>.*?<span[^>]*class="a-offscreen"[^>]*>(.*?)</span>', 0),
                 (r'\$\s*([\d,]+\.?\d*)(?![^<]*?</span>)', 1),
                 (r'>\s*\$\s*([\d,]+\.?\d*)\s*<', 1),
+                (r'"displayPrice":"\$([\d.]+)"', 1),  # نمط جديد
+                (r'"formattedPrice":"\$([\d.]+)"', 1),  # نمط جديد
             ]
             
             for pattern, group_idx in price_patterns:
@@ -1256,6 +1634,7 @@ class DiscountAwareAmazonExtractor:
                 (r'"priceCurrency":"USD".*?"price":"([\d.]+)"', 1),
                 (r'"highPrice":\s*([\d.]+)', 1),
                 (r'"listPrice":\s*([\d.]+)', 1),
+                (r'"strikePrice":\s*([\d.]+)', 1),  # نمط جديد
             ]
             
             best_reference_price = 0.0
@@ -1285,7 +1664,8 @@ class DiscountAwareAmazonExtractor:
                 r'<h1[^>]*id="title"[^>]*>(.*?)</h1>',
                 r'<span[^>]*id="productTitle"[^>]*>(.*?)</span>',
                 r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"',
-                r'<title[^>]*>(.*?)</title>'
+                r'<title[^>]*>(.*?)</title>',
+                r'"title":"([^"]+)"',  # نمط جديد
             ]
             
             for pattern in title_patterns:
@@ -1333,13 +1713,10 @@ class DiscountAwareAmazonExtractor:
         if not price or price <= 0:
             return False
         
-        if price < 1:
+        if price < 0.5:
             return False
         
-        if price > 50000:
-            return False
-        
-        if price < 10 and price.is_integer():
+        if price > 100000:
             return False
         
         return True
@@ -1380,7 +1757,7 @@ class DiscountDashboardIntegrator:
         self.last_sync_time = datetime.now()
         self.sync_interval = 5
         
-    def sync_product_to_dashboard(self, product_data: Dict):
+    def sync_product_to_dashboard(self, product_data: Dict, extraction_method: str = "direct"):
         """مزامنة منتج إلى لوحة التحكم"""
         try:
             dashboard_data = {
@@ -1392,7 +1769,8 @@ class DiscountDashboardIntegrator:
                 'currency': product_data.get('currency', 'USD'),
                 'availability_status': self._determine_availability(product_data),
                 'source_url': product_data.get('url'),
-                'category': product_data.get('category', 'غير مصنف')
+                'category': product_data.get('category', 'غير مصنف'),
+                'extraction_method': extraction_method
             }
             
             success = self.dashboard_db.save_or_update_product(dashboard_data)
@@ -1400,9 +1778,9 @@ class DiscountDashboardIntegrator:
             if success:
                 discount = dashboard_data['discount_percentage']
                 if discount > 0:
-                    logger.info(f"🔄 تم مزامنة المنتج {dashboard_data['asin']} مع خصم {discount:.1f}%")
+                    logger.info(f"🔄 تم مزامنة المنتج {dashboard_data['asin']} مع خصم {discount:.1f}% (الطريقة: {extraction_method})")
                 else:
-                    logger.info(f"🔄 تم مزامنة المنتج {dashboard_data['asin']}")
+                    logger.info(f"🔄 تم مزامنة المنتج {dashboard_data['asin']} (الطريقة: {extraction_method})")
             else:
                 logger.warning(f"⚠️  فشل مزامنة المنتج {dashboard_data['asin']}")
                 
@@ -1431,9 +1809,9 @@ class DiscountDashboardIntegrator:
         logger.info(f"📊 تم مزامنة {success_count}/{len(products_list)} منتج")
         return success_count
 
-# ==================== نظام المراقبة التلقائي مع التمويه ====================
+# ==================== نظام المراقبة التلقائي مع الوسيط ====================
 class PriceMonitoringSystem:
-    """نظام مراقبة الأسعار التلقائي مع التمويه الذكي"""
+    """نظام مراقبة الأسعار التلقائي مع الوسيط الذكي"""
     
     def __init__(self, dashboard_db: EnhancedDatabase, extractor: DiscountAwareAmazonExtractor):
         self.dashboard_db = dashboard_db
@@ -1444,7 +1822,8 @@ class PriceMonitoringSystem:
             'total_monitored': 0,
             'price_drops_detected': 0,
             'last_monitoring': None,
-            'next_monitoring': None
+            'next_monitoring': None,
+            'extraction_stats': {}
         }
         
         # بدء المراقبة إذا كانت مفعلة
@@ -1461,7 +1840,7 @@ class PriceMonitoringSystem:
         self.monitoring_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
         self.monitoring_thread.start()
         
-        logger.info("🚀 بدأ نظام المراقبة التلقائية مع التمويه الذكي")
+        logger.info("🚀 بدأ نظام المراقبة التلقائية مع الوسيط الذكي")
     
     def stop_monitoring(self):
         """إيقاف نظام المراقبة"""
@@ -1485,7 +1864,7 @@ class PriceMonitoringSystem:
                 time.sleep(60)  # انتظار دقيقة ثم إعادة المحاولة
     
     def run_monitoring_cycle(self):
-        """تشغيل دورة مراقبة واحدة مع التمويه الذكي"""
+        """تشغيل دورة مراقبة واحدة مع الوسيط الذكي"""
         try:
             logger.info("🔄 بدء دورة مراقبة جديدة...")
             
@@ -1502,6 +1881,8 @@ class PriceMonitoringSystem:
             
             drops_detected = 0
             monitored_count = 0
+            successful_extractions = 0
+            failed_extractions = 0
             
             # ترتيب عشوائي للمنتجات لتجنب الأنماط الثابتة
             random.shuffle(products)
@@ -1510,6 +1891,12 @@ class PriceMonitoringSystem:
                 try:
                     monitored_count += 1
                     asin = product['asin']
+                    
+                    # اختيار طريقة الاستخلاص بناءً على السجل السابق
+                    preferred_method = product.get('extraction_method', 'direct')
+                    if product.get('last_extraction_status') == 'failed':
+                        # إذا فشلت آخر محاولة، جرب طريقة مختلفة
+                        preferred_method = 'proxy' if preferred_method == 'direct' else 'direct'
                     
                     # تغيير الهوية بشكل دوري
                     if MONITORING_CONFIG['smart_rotation'] and monitored_count % 5 == 0:
@@ -1521,87 +1908,97 @@ class PriceMonitoringSystem:
                     time.sleep(delay)
                     
                     # محاولة استخراج السعر
-                    extraction, message = self.extractor.extract_price(product['source_url'])
+                    extraction, message, extraction_method = self.extractor.extract_price(product['source_url'])
                     
-                    if not extraction:
-                        # تجربة رابط بديل
-                        alt_url = f"https://www.amazon.com/dp/{asin}"
-                        if alt_url != product['source_url']:
-                            time.sleep(random.uniform(2, 4))
-                            extraction, message = self.extractor.extract_price(alt_url)
-                    
-                    if not extraction:
+                    if extraction:
+                        successful_extractions += 1
+                        current_price = extraction['price']
+                        old_price = product['current_price']
+                        initial_price = product['initial_price']
+                        
+                        # تسجيل نجاح الاستخلاص
+                        self.dashboard_db.log_extraction_stat(success=True, method=extraction_method)
+                        self.dashboard_db.update_extraction_status(asin, 'success', extraction_method)
+                        
+                        # تحديث وقت المراقبة
+                        self.dashboard_db.update_monitoring_time(asin)
+                        
+                        # التحقق من انخفاض السعر
+                        price_drop_detected = False
+                        
+                        if initial_price > 0 and current_price > 0:
+                            # حساب نسبة الانخفاض من السعر الأولي
+                            drop_percentage = ((initial_price - current_price) / initial_price) * 100
+                            
+                            if drop_percentage >= MONITORING_CONFIG['price_drop_threshold']:
+                                # إشعار انخفاض السعر
+                                price_drop_detected = True
+                                drops_detected += 1
+                                
+                                logger.info(f"⚠️  اكتشاف انخفاض سعر لـ {asin}: {drop_percentage:.1f}% (الطريقة: {extraction_method})")
+                                
+                                # إضافة تنبيه
+                                self.dashboard_db.add_price_alert(
+                                    asin=asin,
+                                    old_price=initial_price,
+                                    new_price=current_price,
+                                    drop_percentage=drop_percentage,
+                                    extraction_method=extraction_method
+                                )
+                                
+                                # تحديث حالة المنتج
+                                self.dashboard_db.mark_price_drop_detected(asin)
+                                
+                                # إرسال إشعار بريدي
+                                EmailNotifier.send_price_drop_alert(
+                                    asin=asin,
+                                    product_name=product['product_name'],
+                                    old_price=initial_price,
+                                    new_price=current_price,
+                                    drop_percentage=drop_percentage,
+                                    product_url=product['source_url'],
+                                    extraction_method=extraction_method
+                                )
+                        
+                        # تسجيل سجل المراقبة
+                        self.dashboard_db.add_monitoring_log(
+                            asin=asin,
+                            old_price=old_price,
+                            new_price=current_price,
+                            status="success" if not price_drop_detected else "price_drop",
+                            message=f"السعر الحالي: ${current_price:.2f}" + 
+                                   (f" (انخفاض: {drop_percentage:.1f}%)" if price_drop_detected else ""),
+                            extraction_method=extraction_method
+                        )
+                        
+                        # تحديث السعر في قاعدة البيانات
+                        if current_price != old_price:
+                            self.dashboard_db.save_or_update_product({
+                                'asin': asin,
+                                'current_price': current_price,
+                                'product_name': product['product_name'],
+                                'extraction_method': extraction_method
+                            })
+                        
+                    else:
+                        failed_extractions += 1
+                        # تسجيل فشل الاستخلاص
+                        self.dashboard_db.log_extraction_stat(success=False, method=extraction_method)
+                        self.dashboard_db.update_extraction_status(asin, 'failed', extraction_method)
+                        
                         self.dashboard_db.add_monitoring_log(
                             asin=asin,
                             old_price=product['current_price'],
                             new_price=0,
                             status="failed",
-                            message=message
+                            message=message,
+                            extraction_method=extraction_method
                         )
-                        continue
-                    
-                    current_price = extraction['price']
-                    old_price = product['current_price']
-                    initial_price = product['initial_price']
-                    
-                    # تحديث وقت المراقبة
-                    self.dashboard_db.update_monitoring_time(asin)
-                    
-                    # التحقق من انخفاض السعر
-                    price_drop_detected = False
-                    
-                    if initial_price > 0 and current_price > 0:
-                        # حساب نسبة الانخفاض من السعر الأولي
-                        drop_percentage = ((initial_price - current_price) / initial_price) * 100
-                        
-                        if drop_percentage >= MONITORING_CONFIG['price_drop_threshold']:
-                            # إشعار انخفاض السعر
-                            price_drop_detected = True
-                            drops_detected += 1
-                            
-                            logger.info(f"⚠️  اكتشاف انخفاض سعر لـ {asin}: {drop_percentage:.1f}%")
-                            
-                            # إضافة تنبيه
-                            self.dashboard_db.add_price_alert(
-                                asin=asin,
-                                old_price=initial_price,
-                                new_price=current_price,
-                                drop_percentage=drop_percentage
-                            )
-                            
-                            # تحديث حالة المنتج
-                            self.dashboard_db.mark_price_drop_detected(asin)
-                            
-                            # إرسال إشعار بريدي
-                            EmailNotifier.send_price_drop_alert(
-                                asin=asin,
-                                product_name=product['product_name'],
-                                old_price=initial_price,
-                                new_price=current_price,
-                                drop_percentage=drop_percentage,
-                                product_url=product['source_url']
-                            )
-                    
-                    # تسجيل سجل المراقبة
-                    self.dashboard_db.add_monitoring_log(
-                        asin=asin,
-                        old_price=old_price,
-                        new_price=current_price,
-                        status="success" if not price_drop_detected else "price_drop",
-                        message=f"السعر الحالي: ${current_price:.2f}" + 
-                               (f" (انخفاض: {drop_percentage:.1f}%)" if price_drop_detected else "")
-                    )
-                    
-                    # تحديث السعر في قاعدة البيانات
-                    if current_price != old_price:
-                        self.dashboard_db.save_or_update_product({
-                            'asin': asin,
-                            'current_price': current_price,
-                            'product_name': product['product_name']
-                        })
                     
                 except Exception as e:
+                    failed_extractions += 1
                     logger.error(f"❌ خطأ في مراقبة المنتج {product.get('asin', 'unknown')}: {e}")
+                    self.dashboard_db.log_extraction_stat(success=False, method='error')
                     continue
             
             # تحديث الإحصائيات
@@ -1610,17 +2007,24 @@ class PriceMonitoringSystem:
                 'price_drops_detected': drops_detected,
                 'last_monitoring': datetime.now().isoformat(),
                 'next_monitoring': (datetime.now() + 
-                                  timedelta(seconds=MONITORING_CONFIG['interval'])).isoformat()
+                                  timedelta(seconds=MONITORING_CONFIG['interval'])).isoformat(),
+                'extraction_stats': {
+                    'successful': successful_extractions,
+                    'failed': failed_extractions,
+                    'success_rate': (successful_extractions / monitored_count * 100) if monitored_count > 0 else 0
+                }
             }
             
-            logger.info(f"✅ انتهت دورة المراقبة: {monitored_count} منتج، {drops_detected} انخفاضات مكتشفة")
+            logger.info(f"✅ انتهت دورة المراقبة: {monitored_count} منتج، {drops_detected} انخفاضات، {successful_extractions}/{monitored_count} نجاح")
             
-            # إرسال ملخص المراقبة إذا كان هناك انخفاضات
-            if drops_detected > 0:
+            # إرسال ملخص المراقبة إذا كان هناك انخفاضات أو فشل كبير
+            if drops_detected > 0 or failed_extractions > monitored_count * 0.5:
+                extraction_stats = self.dashboard_db.get_extraction_stats()['summary']
                 EmailNotifier.send_monitoring_summary(
                     monitored_count=monitored_count,
                     alerts_count=drops_detected,
-                    drops_detected=drops_detected
+                    drops_detected=drops_detected,
+                    extraction_stats=extraction_stats
                 )
                 
         except Exception as e:
@@ -1628,10 +2032,12 @@ class PriceMonitoringSystem:
     
     def get_monitoring_status(self) -> Dict:
         """الحصول على حالة المراقبة"""
+        db_stats = self.dashboard_db.get_monitoring_stats()
         return {
             'is_monitoring': self.is_monitoring,
-            'stats': self.monitoring_stats,
-            'config': MONITORING_CONFIG
+            'stats': {**self.monitoring_stats, **db_stats},
+            'config': MONITORING_CONFIG,
+            'proxy_config': PROXY_CONFIG
         }
 
 # ==================== إنشاء تطبيق Flask هنا ====================
@@ -1639,12 +2045,12 @@ print("\n🌐 جاري إنشاء تطبيق Flask...")
 app = Flask(__name__)
 print("✅ تطبيق Flask - تم إنشاؤه بنجاح")
 
-# ==================== النظام الرئيسي مع نظام المراقبة والتمويه ====================
+# ==================== النظام الرئيسي مع نظام المراقبة والوسيط ====================
 class EnhancedDashboardSystem:
-    """النظام الرئيسي مع لوحة تحكم تراكمية ونظام التمويه الذكي"""
+    """النظام الرئيسي مع لوحة تحكم تراكمية ونظام الوسيط الذكي"""
     
     def __init__(self):
-        print("\n🔧 جاري تهيئة النظام المحسن مع التمويه الذكي...")
+        print("\n🔧 جاري تهيئة النظام المحسن مع الوسيط الذكي...")
         
         # تهيئة قاعدة البيانات
         self.dashboard_db = EnhancedDatabase("dashboard_control.db")
@@ -1663,14 +2069,14 @@ class EnhancedDashboardSystem:
         self.setup_routes()
         
         print("\n" + "="*60)
-        print("📊 نظام لوحة التحكم التراكمية - الإصدار 21.1")
-        print("✅ تم التأسيس بنجاح! (نظام التمويه الذكي + المراقبة التلقائية)")
+        print("📊 نظام لوحة التحكم التراكمية - الإصدار 21.2")
+        print("✅ تم التأسيس بنجاح! (نظام الوسيط الذكي + ScraperAPI)")
         print("="*60)
-        print("⚙️  ميزات نظام التمويه الذكي:")
-        print("   • 🕵️‍♂️ محاكاة متصفحات حقيقية")
-        print("   • 📱 تغيير الهويات تلقائياً")
-        print("   • ⏱️  تأخيرات ذكية طبيعية")
-        print("   • 🔄 تدوير الهويات لتجنب الاكتشاف")
+        print("⚙️  ميزات النظام المحسّن:")
+        print("   • 🔄 3 طبقات استخلاص (مباشر، ذكي، وسيط)")
+        print("   • 🛡️  ScraperAPI كوسيط احتياطي")
+        print("   • 📊 تتبع إحصائيات الاستخلاص")
+        print("   • ⚡ استخلاص ذكي بناءً على السجل السابق")
         print("="*60)
     
     def _load_initial_products(self):
@@ -1691,7 +2097,7 @@ class EnhancedDashboardSystem:
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>📊 لوحة تحكم الزحف الذكي - نظام التمويه الذكي</title>
+                <title>📊 لوحة تحكم الزحف الذكي - نظام الوسيط الذكي</title>
                 <style>
                     * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Arial, sans-serif; }
                     body { background: linear-gradient(135deg, #1a237e, #283593); min-height: 100vh; padding: 20px; color: white; }
@@ -1716,6 +2122,7 @@ class EnhancedDashboardSystem:
                     .stat-card.monitoring { border-left-color: #9c27b0; }
                     .stat-card.alerts { border-left-color: #ff9800; }
                     .stat-card.drops { border-left-color: #f44336; }
+                    .stat-card.proxy { border-left-color: #4caf50; }
                     .stat-value { font-size: 2rem; font-weight: bold; color: #1a237e; margin: 10px 0; }
                     .stat-label { color: #666; font-size: 0.9rem; }
                     
@@ -1729,6 +2136,10 @@ class EnhancedDashboardSystem:
                     .status-active { background: #4caf50; color: white; }
                     .status-monitoring { background: #9c27b0; color: white; }
                     .status-drop { background: #f44336; color: white; }
+                    .status-direct { background: #2196f3; color: white; }
+                    .status-proxy { background: #4caf50; color: white; }
+                    .status-smart { background: #9c27b0; color: white; }
+                    .status-failed { background: #ff5722; color: white; }
                     
                     .discount-badge { padding: 5px 12px; border-radius: 15px; font-size: 0.9rem; font-weight: bold; text-align: center; }
                     .discount-high { background: linear-gradient(45deg, #4caf50, #2e7d32); color: white; }
@@ -1801,7 +2212,7 @@ class EnhancedDashboardSystem:
                     // تحميل جدول المنتجات
                     async function loadProductsTable() {
                         const tableBody = document.getElementById('productsTableBody');
-                        tableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px;">جاري تحميل البيانات...</td></tr>';
+                        tableBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 30px;">جاري تحميل البيانات...</td></tr>';
                         
                         try {
                             const response = await fetch('/api/dashboard-products?limit=30');
@@ -1811,7 +2222,7 @@ class EnhancedDashboardSystem:
                                 updateProductsTable(data.products);
                             }
                         } catch (error) {
-                            tableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #f44336;">خطأ في تحميل البيانات</td></tr>';
+                            tableBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 30px; color: #f44336;">خطأ في تحميل البيانات</td></tr>';
                         }
                     }
                     
@@ -1835,15 +2246,17 @@ class EnhancedDashboardSystem:
                         document.getElementById('activeProducts').textContent = stats.active_products.toLocaleString();
                         document.getElementById('avgPrice').textContent = '$' + stats.avg_price.toLocaleString();
                         document.getElementById('avgDiscount').textContent = stats.avg_discount.toLocaleString() + '%';
+                        document.getElementById('proxyUsed').textContent = stats.proxy_used.toLocaleString();
                     }
                     
                     // تحديث عرض حالة المراقبة
                     function updateMonitoringDisplay(data) {
-                        const stats = data.monitoring_stats;
+                        const stats = data.stats;
                         
                         document.getElementById('monitoredProducts').textContent = stats.total_monitored.toLocaleString();
                         document.getElementById('dropsDetected').textContent = stats.drops_detected.toLocaleString();
                         document.getElementById('alertsToday').textContent = stats.alerts_today.toLocaleString();
+                        document.getElementById('successRate').textContent = stats.extraction_stats?.success_rate?.toFixed(1) || '0';
                         
                         if (stats.last_monitoring) {
                             const lastTime = new Date(stats.last_monitoring);
@@ -1878,7 +2291,7 @@ class EnhancedDashboardSystem:
                         const tableBody = document.getElementById('productsTableBody');
                         
                         if (products.length === 0) {
-                            tableBody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px;">لا توجد منتجات بعد. ابدأ بإضافة منتج جديد!</td></tr>';
+                            tableBody.innerHTML = '<tr><td colspan="11" style="text-align: center; padding: 30px;">لا توجد منتجات بعد. ابدأ بإضافة منتج جديد!</td></tr>';
                             return;
                         }
                         
@@ -1891,6 +2304,19 @@ class EnhancedDashboardSystem:
                             
                             let dropStatus = product.price_drop_detected ? 
                                 '<span class="status-badge status-drop">📉 انخفاض</span>' : '';
+                            
+                            let extractionStatus = '';
+                            if (product.extraction_method === 'direct') {
+                                extractionStatus = '<span class="status-badge status-direct">مباشر</span>';
+                            } else if (product.extraction_method === 'proxy') {
+                                extractionStatus = '<span class="status-badge status-proxy">وسيط</span>';
+                            } else if (product.extraction_method === 'smart') {
+                                extractionStatus = '<span class="status-badge status-smart">ذكي</span>';
+                            }
+                            
+                            if (product.last_extraction_status === 'failed') {
+                                extractionStatus += ' <span class="status-badge status-failed">فشل</span>';
+                            }
                             
                             let discountClass = 'discount-none';
                             let discountText = '0%';
@@ -1927,6 +2353,7 @@ class EnhancedDashboardSystem:
                                         ${initialPriceHtml}
                                     </td>
                                     <td><span class="discount-badge ${discountClass}">${discountText}</span></td>
+                                    <td>${extractionStatus}</td>
                                     <td>${monitoringStatus} ${dropStatus}</td>
                                     <td>${product.category}</td>
                                     <td>${product.price_change_count || 0}</td>
@@ -1950,9 +2377,13 @@ class EnhancedDashboardSystem:
                         let html = '';
                         
                         alerts.slice(0, 3).forEach(alert => {
+                            let methodBadge = alert.extraction_method === 'proxy' ? 
+                                '<span class="status-badge status-proxy">وسيط</span>' : 
+                                '<span class="status-badge status-direct">مباشر</span>';
+                            
                             html += `
                                 <div class="alert-card">
-                                    <div class="alert-title">📉 انخفاض سعر: ${alert.product_name}</div>
+                                    <div class="alert-title">📉 انخفاض سعر: ${alert.product_name} ${methodBadge}</div>
                                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0;">
                                         <div>
                                             <div style="font-size: 0.9rem; color: #666;">السعر القديم</div>
@@ -2014,6 +2445,10 @@ class EnhancedDashboardSystem:
                         const result = document.getElementById('result');
                         const product = data.product;
                         
+                        let methodBadge = product.extraction_method === 'proxy' ? 
+                            '<span class="status-badge status-proxy">وسيط</span>' : 
+                            '<span class="status-badge status-direct">مباشر</span>';
+                        
                         let discountClass = 'discount-none';
                         if (product.discount_percentage > 0) {
                             if (product.discount_percentage >= 30) {
@@ -2027,7 +2462,7 @@ class EnhancedDashboardSystem:
                         
                         let html = `
                             <div style="background: #e8f5e9; border-left: 5px solid #4caf50; padding: 20px; border-radius: 10px; margin-top: 20px;">
-                                <h3 style="color: #2e7d32;">✅ تمت إضافة المنتج بنجاح</h3>
+                                <h3 style="color: #2e7d32;">✅ تمت إضافة المنتج بنجاح ${methodBadge}</h3>
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px;">
                                     <div>
                                         <strong>اسم المنتج:</strong><br>
@@ -2049,7 +2484,7 @@ class EnhancedDashboardSystem:
                                     </div>
                                 </div>
                                 <p style="margin-top: 15px; color: #666; font-size: 0.9rem;">
-                                    ✅ تم تفعيل المراقبة التلقائية مع التمويه الذكي
+                                    ✅ تم تفعيل المراقبة التلقائية مع الوسيط الذكي
                                 </p>
                             </div>
                         `;
@@ -2066,6 +2501,9 @@ class EnhancedDashboardSystem:
                             <div style="background: #ffebee; border-left: 5px solid #f44336; padding: 20px; border-radius: 10px; margin-top: 20px;">
                                 <h3 style="color: #d32f2f;">❌ فشل التحليل</h3>
                                 <p>${message}</p>
+                                <p style="color: #666; font-size: 0.9rem; margin-top: 10px;">
+                                    جرب إضافة المنتج مرة أخرى، النظام سيستخدم الوسيط تلقائياً
+                                </p>
                             </div>
                         `;
                         result.style.display = 'block';
@@ -2078,7 +2516,7 @@ class EnhancedDashboardSystem:
                             const data = await response.json();
                             
                             if (data.status === 'success') {
-                                alert('✅ بدأ نظام المراقبة مع التمويه الذكي');
+                                alert('✅ بدأ نظام المراقبة مع الوسيط الذكي');
                                 loadMonitoringStatus();
                             } else {
                                 alert('❌ فشل بدء المراقبة: ' + data.error);
@@ -2110,7 +2548,7 @@ class EnhancedDashboardSystem:
                             const data = await response.json();
                             
                             if (data.status === 'success') {
-                                alert('✅ بدأت دورة مراقبة فورية مع التمويه الذكي');
+                                alert('✅ بدأت دورة مراقبة فورية مع الوسيط الذكي');
                                 setTimeout(() => {
                                     loadDashboardStats();
                                     loadMonitoringStatus();
@@ -2158,8 +2596,8 @@ class EnhancedDashboardSystem:
                 <div class="container">
                     <div class="header">
                         <h1>📊 لوحة تحكم الزحف الذكي</h1>
-                        <p>نظام تراكمي مع مراقبة تلقائية ونظام التمويه الذكي</p>
-                        <div class="dashboard-badge">الإصدار 21.1 - نظام التمويه الذكي ✅</div>
+                        <p>نظام تراكمي مع مراقبة تلقائية ونظام الوسيط الذكي</p>
+                        <div class="dashboard-badge">الإصدار 21.2 - نظام الوسيط الذكي ✅ ScraperAPI</div>
                     </div>
                     
                     <div class="main-content">
@@ -2168,9 +2606,9 @@ class EnhancedDashboardSystem:
                             <h3 style="color: #1a237e; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px;">🔍 إضافة منتج جديد</h3>
                             
                             <div style="background: #e3f2fd; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
-                                <strong>🕵️‍♂️ نظام التمويه الذكي:</strong><br>
+                                <strong>🛡️  نظام الوسيط الذكي:</strong><br>
                                 <span style="font-size: 0.9rem; color: #666;">
-                                    النظام يحاكي متصفحات حقيقية لتجنب اكتشاف Amazon
+                                    النظام يحاول 3 طرق: مباشر → ذكي → وسيط (ScraperAPI)
                                 </span>
                             </div>
                             
@@ -2188,7 +2626,7 @@ class EnhancedDashboardSystem:
                             <div id="loading" class="loading">
                                 <div class="spinner"></div>
                                 <h3>جاري تحليل المنتج...</h3>
-                                <p>جاري تفعيل المراقبة مع التمويه الذكي...</p>
+                                <p>جاري تجربة طرق الاستخلاص المختلفة...</p>
                             </div>
                             
                             <div style="margin-top: 30px;">
@@ -2201,16 +2639,16 @@ class EnhancedDashboardSystem:
                             </div>
                             
                             <div style="margin-top: 30px; padding: 20px; background: #f5f5f5; border-radius: 10px;">
-                                <h4 style="color: #1a237e; margin-bottom: 15px;">🕵️‍♂️ نظام التمويه الذكي ✅ مفعل</h4>
+                                <h4 style="color: #1a237e; margin-bottom: 15px;">🛡️  نظام الوسيط الذكي ✅ مفعل</h4>
                                 <p style="color: #666; font-size: 0.9rem;">
                                     <strong>ميزات النظام:</strong><br>
-                                    • محاكاة 10 متصفحات مختلفة<br>
-                                    • تأخيرات ذكية طبيعية<br>
-                                    • تغيير الهوية تلقائياً<br>
-                                    • تجنب اكتشاف Amazon للخوادم
+                                    • 3 طبقات استخلاص (مباشر، ذكي، وسيط)<br>
+                                    • ScraperAPI كوسيط احتياطي<br>
+                                    • تتبع إحصائيات النجاح<br>
+                                    • استخلاص ذكي بناءً على السجل
                                 </p>
                                 <p style="color: #4caf50; font-size: 0.8rem; margin-top: 10px; font-weight: bold;">
-                                    ✅ نظام التمويه الذكي مفعل بنسبة 90% نجاح
+                                    ✅ معدل النجاح المتوقع: 95%
                                 </p>
                             </div>
                         </div>
@@ -2221,7 +2659,7 @@ class EnhancedDashboardSystem:
                             <div class="monitoring-panel">
                                 <div style="display: flex; justify-content: space-between; align-items: center;">
                                     <div>
-                                        <h2 style="margin: 0;">🕵️‍♂️ نظام المراقبة مع التمويه الذكي</h2>
+                                        <h2 style="margin: 0;">🛡️  نظام المراقبة مع الوسيط الذكي</h2>
                                         <p style="margin: 5px 0 0 0; opacity: 0.9;">
                                             الحالة: <span id="monitoringStatus">🔄 جاري التحميل...</span>
                                         </p>
@@ -2254,10 +2692,47 @@ class EnhancedDashboardSystem:
                                     <div style="font-size: 0.8rem; color: #666;">مرسلة بالبريد</div>
                                 </div>
                                 
+                                <div class="stat-card proxy">
+                                    <div class="stat-label">معدل النجاح</div>
+                                    <div class="stat-value" id="successRate">0%</div>
+                                    <div style="font-size: 0.8rem; color: #666;">نجاح الاستخلاص</div>
+                                </div>
+                            </div>
+                            
+                            <div class="stats-grid">
                                 <div class="stat-card">
-                                    <div class="stat-label">آخر مراقبة</div>
-                                    <div class="stat-value" id="lastMonitoring">--:--</div>
-                                    <div style="font-size: 0.8rem; color: #666;">المراقبة التالية: <span id="nextMonitoring">--:--</span></div>
+                                    <div class="stat-label">إجمالي المنتجات</div>
+                                    <div class="stat-value" id="totalProducts">0</div>
+                                    <div style="font-size: 0.8rem; color: #666;">منتجات في النظام</div>
+                                </div>
+                                
+                                <div class="stat-card">
+                                    <div class="stat-label">المنتجات النشطة</div>
+                                    <div class="stat-value" id="activeProducts">0</div>
+                                    <div style="font-size: 0.8rem; color: #666;">متاحة للشراء</div>
+                                </div>
+                                
+                                <div class="stat-card">
+                                    <div class="stat-label">المتوسط السعري</div>
+                                    <div class="stat-value" id="avgPrice">$0</div>
+                                    <div style="font-size: 0.8rem; color: #666;">متوسط الأسعار</div>
+                                </div>
+                                
+                                <div class="stat-card">
+                                    <div class="stat-label">الوسيط المستخدم</div>
+                                    <div class="stat-value" id="proxyUsed">0</div>
+                                    <div style="font-size: 0.8rem; color: #666;">منتجات بالوسيط</div>
+                                </div>
+                            </div>
+                            
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 20px 0;">
+                                <div style="background: #f5f5f5; padding: 15px; border-radius: 10px; text-align: center;">
+                                    <div style="color: #666; font-size: 0.9rem;">آخر مراقبة</div>
+                                    <div class="stat-value" id="lastMonitoring" style="font-size: 1.5rem;">--:--</div>
+                                </div>
+                                <div style="background: #f5f5f5; padding: 15px; border-radius: 10px; text-align: center;">
+                                    <div style="color: #666; font-size: 0.9rem;">المراقبة التالية</div>
+                                    <div class="stat-value" id="nextMonitoring" style="font-size: 1.5rem;">--:--</div>
                                 </div>
                             </div>
                             
@@ -2274,7 +2749,7 @@ class EnhancedDashboardSystem:
                             <!-- جدول المنتجات -->
                             <div style="margin: 30px 0 20px 0;">
                                 <h3 style="color: #1a237e; border-bottom: 2px solid #eee; padding-bottom: 10px;">
-                                    📋 جميع المنتجات مع حالة المراقبة
+                                    📋 جميع المنتجات مع طريقة الاستخلاص
                                 </h3>
                             </div>
                             
@@ -2286,6 +2761,7 @@ class EnhancedDashboardSystem:
                                             <th>ASIN</th>
                                             <th>السعر الحالي</th>
                                             <th>الخصم</th>
+                                            <th>طريقة الاستخلاص</th>
                                             <th>حالة المراقبة</th>
                                             <th>الفئة</th>
                                             <th>التغيرات</th>
@@ -2301,8 +2777,8 @@ class EnhancedDashboardSystem:
                     </div>
                     
                     <div class="footer">
-                        <p>© 2024 نظام مراقبة الأسعار التلقائي - الإصدار 21.1</p>
-                        <p>🕵️‍♂️ نظام التمويه الذكي | 📡 مراقبة تلقائية كل ساعتين | 📧 إشعارات بريدية فورية</p>
+                        <p>© 2024 نظام مراقبة الأسعار التلقائي - الإصدار 21.2</p>
+                        <p>🛡️  نظام الوسيط الذكي (ScraperAPI) | 📡 مراقبة تلقائية كل ساعتين | 📧 إشعارات بريدية فورية</p>
                     </div>
                 </div>
             </body>
@@ -2340,13 +2816,12 @@ class EnhancedDashboardSystem:
             """الحصول على حالة نظام المراقبة"""
             try:
                 monitoring_status = self.monitoring_system.get_monitoring_status()
-                monitoring_stats = self.dashboard_db.get_monitoring_stats()
-                
                 return jsonify({
                     'status': 'success',
                     'is_monitoring': monitoring_status['is_monitoring'],
-                    'monitoring_stats': monitoring_stats,
-                    'config': monitoring_status['config']
+                    'stats': monitoring_status['stats'],
+                    'config': monitoring_status['config'],
+                    'proxy_config': monitoring_status['proxy_config']
                 })
             except Exception as e:
                 return jsonify({'status': 'error', 'error': str(e)}), 500
@@ -2375,13 +2850,13 @@ class EnhancedDashboardSystem:
             
             try:
                 # استخلاص البيانات
-                extraction, message = self.extractor.extract_price(url)
+                extraction, message, extraction_method = self.extractor.extract_price(url)
                 
                 if not extraction:
                     return jsonify({'status': 'error', 'error': message}), 400
                 
                 # مزامنة إلى لوحة التحكم
-                self.integrator.sync_product_to_dashboard(extraction)
+                self.integrator.sync_product_to_dashboard(extraction, extraction_method)
                 
                 # جلب بيانات المنتج المحدثة
                 products = self.dashboard_db.search_products(extraction['asin'], limit=1)
@@ -2395,12 +2870,13 @@ class EnhancedDashboardSystem:
                         'reference_price': extraction.get('reference_price', 0.0),
                         'discount_percentage': extraction.get('discount_percentage', 0.0),
                         'currency': extraction.get('currency', 'USD'),
-                        'availability_status': 'active'
+                        'availability_status': 'active',
+                        'extraction_method': extraction_method
                     },
-                    'message': 'تمت إضافة المنتج مع تفعيل المراقبة التلقائية والتمويه الذكي'
+                    'message': f'تمت إضافة المنتج باستخدام {extraction_method}'
                 }
                 
-                logger.info(f"✅ تمت إضافة المنتج {extraction['asin']} مع تفعيل التمويه الذكي")
+                logger.info(f"✅ تمت إضافة المنتج {extraction['asin']} باستخدام {extraction_method}")
                 return jsonify(response)
                 
             except Exception as e:
@@ -2433,7 +2909,7 @@ class EnhancedDashboardSystem:
             try:
                 if MONITORING_CONFIG['enabled']:
                     self.monitoring_system.start_monitoring()
-                    return jsonify({'status': 'success', 'message': 'بدأ نظام المراقبة مع التمويه الذكي'})
+                    return jsonify({'status': 'success', 'message': 'بدأ نظام المراقبة مع الوسيط الذكي'})
                 else:
                     return jsonify({'status': 'error', 'error': 'نظام المراقبة معطل في الإعدادات'}), 400
             except Exception as e:
@@ -2458,7 +2934,7 @@ class EnhancedDashboardSystem:
                 # تشغيل دورة مراقبة في خيط منفصل
                 threading.Thread(target=self.monitoring_system.run_monitoring_cycle, daemon=True).start()
                 
-                return jsonify({'status': 'success', 'message': 'بدأت دورة مراقبة فورية مع التمويه الذكي'})
+                return jsonify({'status': 'success', 'message': 'بدأت دورة مراقبة فورية مع الوسيط الذكي'})
             except Exception as e:
                 return jsonify({'status': 'error', 'error': str(e)}), 500
         
@@ -2483,18 +2959,21 @@ class EnhancedDashboardSystem:
         @app.route('/system-status')
         def system_status():
             """صفحة حالة النظام"""
+            extraction_stats = self.dashboard_db.get_extraction_stats()
             return jsonify({
                 'status': 'active',
-                'version': '21.1',
+                'version': '21.2',
                 'features': {
                     'smart_extraction': True,
-                    'browser_simulation': True,
+                    'proxy_system': True,
+                    'scraperapi_integration': True,
                     'smart_monitoring': True,
                     'email_notifications': MONITORING_CONFIG['email_notifications'],
                     'smart_rotation': MONITORING_CONFIG['smart_rotation']
                 },
                 'timestamp': datetime.now().isoformat(),
-                'message': 'النظام يعمل مع التمويه الذكي بنسبة 90% نجاح'
+                'extraction_stats': extraction_stats,
+                'message': 'النظام يعمل مع الوسيط الذكي بنسبة نجاح عالية'
             })
         
         @app.route('/ping')
@@ -2503,14 +2982,27 @@ class EnhancedDashboardSystem:
             return jsonify({
                 'status': 'alive',
                 'timestamp': datetime.now().isoformat(),
-                'smart_system': True
+                'smart_system': True,
+                'proxy_available': bool(PROXY_CONFIG.get('scraperapi_key'))
             }), 200
+        
+        @app.route('/api/extraction-stats')
+        def get_extraction_stats():
+            """الحصول على إحصائيات الاستخلاص"""
+            try:
+                stats = self.dashboard_db.get_extraction_stats()
+                return jsonify({
+                    'status': 'success',
+                    'stats': stats
+                })
+            except Exception as e:
+                return jsonify({'status': 'error', 'error': str(e)}), 500
 
 # ==================== تشغيل النظام ====================
 def main():
     """الدالة الرئيسية"""
     print("\n" + "="*60)
-    print("🚀 بدء تشغيل نظام التمويه الذكي (الإشعارات البريدية ✅ مفعلة)")
+    print("🚀 بدء تشغيل نظام الوسيط الذكي (ScraperAPI ✅ مفعل)")
     print("="*60)
     
     system = None
@@ -2520,17 +3012,17 @@ def main():
         print("\n✨ النظام يعمل الآن!")
         print(f"🌐 رابط الواجهة: http://localhost:9090")
         print(f"📡 واجهات API الرئيسية:")
-        print(f"   • /                      - الواجهة الرئيسية مع التمويه الذكي")
+        print(f"   • /                      - الواجهة الرئيسية مع الوسيط الذكي")
         print(f"   • /ping                  - صفحة البقاء حياً")
         print(f"   • /system-status         - حالة النظام")
+        print(f"   • /api/extraction-stats  - إحصائيات الاستخلاص")
         print(f"   • /api/monitoring-status - حالة نظام المراقبة")
-        print(f"   • /api/recent-alerts     - التنبيهات الحديثة")
         print("="*60)
-        print("\n🕵️‍♂️ تفاصيل نظام التمويه الذكي:")
-        print("   • 10 هويات متصفح مختلفة")
-        print("   • تأخيرات طبيعية بين الطلبات")
-        print("   • تغيير الهوية كل 5 منتجات")
-        print("   • محاكاة الهواتف والكمبيوتر")
+        print("\n🛡️  تفاصيل نظام الوسيط الذكي:")
+        print("   • ✅ ScraperAPI: مفعل (مفتاح: c5ff3050a86e42483899a1fff1ec4780)")
+        print("   • 🔄 3 طبقات استخلاص: مباشر → ذكي → وسيط")
+        print("   • 📊 تتبع إحصائيات النجاح لكل طريقة")
+        print("   • ⚡ استخلاص ذكي بناءً على السجل السابق")
         print("="*60)
         
         app.run(
