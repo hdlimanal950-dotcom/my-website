@@ -54,13 +54,13 @@ MONITORING_CONFIG = {
 
 # 🔥 نظام التحليل التاريخي الذكي الجديد
 HISTORICAL_ANALYSIS_CONFIG = {
-    'enabled': True,  # تفعيل النظام التاريخي
-    'camel_api_key': '9e2a31cc365df963ee07a7084767a48c49f538fd',  # ✅ محرك الأساسي للتاريخ
+    'enabled': True,
+    'camel_api_key': '9e2a31cc365df963ee07a7084767a48c49f538fd',
     'camel_endpoint': 'https://camelcamelcamel.com',
-    'fetch_on_new_product': True,  # جلب التاريخ عند إضافة منتج جديد
-    'recheck_days': 7,  # إعادة التحقق كل 7 أيام
-    'price_history_days': 365,  # البحث في تاريخ سنة كاملة
-    'use_advanced_patterns': True,  # استخدام أنماط متقدمة للبحث
+    'fetch_on_new_product': True,
+    'recheck_days': 7,
+    'price_history_days': 365,
+    'use_advanced_patterns': True,
 }
 
 EMAIL_CONFIG = {
@@ -236,7 +236,7 @@ class SmartBrowserSimulator:
             proxy_url = f"{PROXY_CONFIG['scraperapi_url']}/?api_key={PROXY_CONFIG['scraperapi_key']}&url={encoded_url}"
             proxy_url += "&render=true&country_code=us&device_type=desktop"
             return proxy_url
-        except:
+        except Exception:
             return None
 
 # ==================== إعدادات التسجيل ====================
@@ -304,12 +304,12 @@ class EnhancedDatabase:
                     price_drop_detected BOOLEAN DEFAULT 0,
                     extraction_method TEXT DEFAULT 'direct',
                     last_extraction_status TEXT DEFAULT 'success',
-                    historical_low_price REAL DEFAULT 0.0,          -- 🔥 أقل سعر تاريخي
-                    price_average REAL DEFAULT 0.0,                -- 🔥 متوسط السعر العادل
-                    last_history_sync TIMESTAMP,                   -- 🔥 آخر تحديث للبيانات التاريخية
-                    historical_data_available BOOLEAN DEFAULT 0,   -- 🔥 هل هناك بيانات تاريخية
-                    purchase_recommendation TEXT,                  -- 🔥 توصية الشراء
-                    recommendation_confidence REAL DEFAULT 0.0,    -- 🔥 ثقة التوصية
+                    historical_low_price REAL DEFAULT 0.0,
+                    price_average REAL DEFAULT 0.0,
+                    last_history_sync TIMESTAMP,
+                    historical_data_available BOOLEAN DEFAULT 0,
+                    purchase_recommendation TEXT,
+                    recommendation_confidence REAL DEFAULT 0.0,
                     CHECK (length(asin) = 10),
                     CHECK (discount_percentage >= 0 AND discount_percentage <= 100)
                 )
@@ -435,30 +435,32 @@ class EnhancedDatabase:
             ''')
             
             conn.commit()
-            
-            # ============ إضافة الأعمدة المفقودة إذا لزم ============
             self._add_missing_columns(cursor)
-            
             conn.commit()
             
-            # ============ الفهارس ============
-            try:
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_dashboard_asin ON dashboard_products(asin)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_dashboard_discount ON dashboard_products(discount_percentage DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_dashboard_status ON dashboard_products(availability_status, last_updated DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(asin, captured_at DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_historical_data ON historical_price_data(asin, analysis_date DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_recommendations ON purchase_recommendations(asin, generated_at DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_events_time ON update_events(created_at DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_stats_date ON display_stats(created_date DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_alerts_time ON price_alerts(alert_sent_at DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_monitoring_time ON monitoring_logs(monitored_at DESC)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_extraction_method ON dashboard_products(extraction_method)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_extraction_stats_date ON extraction_stats(date DESC)')
-                conn.commit()
-            except Exception as e:
-                print(f"⚠️  تحذير في إنشاء الفهارس: {e}")
+            # إنشاء الفهارس
+            indexes = [
+                'CREATE INDEX IF NOT EXISTS idx_dashboard_asin ON dashboard_products(asin)',
+                'CREATE INDEX IF NOT EXISTS idx_dashboard_discount ON dashboard_products(discount_percentage DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_dashboard_status ON dashboard_products(availability_status, last_updated DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_price_history ON price_history(asin, captured_at DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_historical_data ON historical_price_data(asin, analysis_date DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_recommendations ON purchase_recommendations(asin, generated_at DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_events_time ON update_events(created_at DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_stats_date ON display_stats(created_date DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_alerts_time ON price_alerts(alert_sent_at DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_monitoring_time ON monitoring_logs(monitored_at DESC)',
+                'CREATE INDEX IF NOT EXISTS idx_extraction_method ON dashboard_products(extraction_method)',
+                'CREATE INDEX IF NOT EXISTS idx_extraction_stats_date ON extraction_stats(date DESC)'
+            ]
             
+            for index_sql in indexes:
+                try:
+                    cursor.execute(index_sql)
+                except Exception as e:
+                    print(f"⚠️  تحذير في إنشاء الفهرس: {e}")
+            
+            conn.commit()
             print("✅ قاعدة البيانات الموسعة مع النظام التاريخي جاهزة")
             self._update_display_stats()
             
@@ -474,30 +476,22 @@ class EnhancedDatabase:
             cursor.execute("PRAGMA table_info(dashboard_products)")
             columns = [col[1] for col in cursor.fetchall()]
             
-            # الأعمدة الجديدة للنظام التاريخي
             historical_columns = [
-                'historical_low_price', 'price_average', 'last_history_sync',
-                'historical_data_available', 'purchase_recommendation', 'recommendation_confidence'
+                ('historical_low_price', 'REAL DEFAULT 0.0'),
+                ('price_average', 'REAL DEFAULT 0.0'),
+                ('last_history_sync', 'TIMESTAMP'),
+                ('historical_data_available', 'BOOLEAN DEFAULT 0'),
+                ('purchase_recommendation', 'TEXT'),
+                ('recommendation_confidence', 'REAL DEFAULT 0.0')
             ]
             
-            for col in historical_columns:
-                if col not in columns:
+            for col_name, col_type in historical_columns:
+                if col_name not in columns:
                     try:
-                        if col == 'historical_low_price':
-                            cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} REAL DEFAULT 0.0')
-                        elif col == 'price_average':
-                            cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} REAL DEFAULT 0.0')
-                        elif col == 'last_history_sync':
-                            cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} TIMESTAMP')
-                        elif col == 'historical_data_available':
-                            cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} BOOLEAN DEFAULT 0')
-                        elif col == 'purchase_recommendation':
-                            cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} TEXT')
-                        elif col == 'recommendation_confidence':
-                            cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col} REAL DEFAULT 0.0')
-                        print(f"✅ تمت إضافة العمود التاريخي: {col}")
+                        cursor.execute(f'ALTER TABLE dashboard_products ADD COLUMN {col_name} {col_type}')
+                        print(f"✅ تمت إضافة العمود التاريخي: {col_name}")
                     except Exception as e:
-                        print(f"⚠️  تحذير في إضافة العمود {col}: {e}")
+                        print(f"⚠️  تحذير في إضافة العمود {col_name}: {e}")
             
         except Exception as e:
             print(f"⚠️  تحذير في التحقق من الأعمدة المفقودة: {e}")
@@ -513,7 +507,6 @@ class EnhancedDatabase:
             if not asin or len(asin) != 10:
                 return False
             
-            # استخراج البيانات التاريخية إذا كانت موجودة
             historical_low = product_data.get('historical_low_price')
             price_average = product_data.get('price_average')
             recommendation = product_data.get('purchase_recommendation')
@@ -524,7 +517,6 @@ class EnhancedDatabase:
             discount_percentage = product_data.get('discount_percentage', 0.0)
             extraction_method = product_data.get('extraction_method', 'direct')
             
-            # التحقق مما إذا كان المنتج موجوداً
             cursor.execute('''
                 SELECT id, current_price, reference_price, discount_percentage, initial_price 
                 FROM dashboard_products WHERE asin = ?
@@ -534,11 +526,9 @@ class EnhancedDatabase:
             if existing:
                 product_id, old_price, old_reference, old_discount, initial_price = existing
                 
-                # بناء الاستعلام الديناميكي لتحديث الحقول التاريخية
                 update_fields = []
                 update_values = []
                 
-                # الحقول الأساسية
                 update_fields.append('product_name = COALESCE(?, product_name)')
                 update_values.append(product_data.get('product_name'))
                 
@@ -569,13 +559,10 @@ class EnhancedDatabase:
                 update_values.append(1 if abs(old_price - current_price) > 0.01 else 0)
                 
                 update_fields.append('price_drop_detected = 0')
-                
                 update_fields.append('extraction_method = ?')
                 update_values.append(extraction_method)
-                
                 update_fields.append('last_extraction_status = "success"')
                 
-                # تحديث الحقول التاريخية إذا كانت متوفرة
                 if historical_low is not None:
                     update_fields.append('historical_low_price = ?')
                     update_values.append(historical_low)
@@ -593,16 +580,13 @@ class EnhancedDatabase:
                     update_fields.append('recommendation_confidence = ?')
                     update_values.append(confidence)
                 
-                # إذا تم تحديث البيانات التاريخية
                 if any([historical_low is not None, price_average is not None]):
                     update_fields.append('last_history_sync = CURRENT_TIMESTAMP')
                 
-                # إذا لم يكن هناك سعر أولي، تعيينه الآن
                 if not initial_price and current_price > 0:
                     update_fields.append('initial_price = ?')
                     update_values.append(current_price)
                 
-                # بناء وتنفيذ الاستعلام
                 update_query = f'''
                     UPDATE dashboard_products 
                     SET {', '.join(update_fields)}
@@ -612,26 +596,22 @@ class EnhancedDatabase:
                 
                 cursor.execute(update_query, tuple(update_values))
                 
-                # تسجيل حدث التحديث
                 if abs(old_price - current_price) > 0.01:
                     self._log_update_event('price_change', asin, str(old_price), str(current_price), 
                                          discount_percentage - old_discount, extraction_method)
                 
-                # تسجيل حدث التاريخ إذا تم تحديثه
                 if historical_low is not None:
                     self._log_update_event('historical_update', asin, 'N/A', f'Lowest: ${historical_low:.2f}', 
                                          0, 'historical_analyzer')
                 
             else:
-                # إضافة منتج جديد
                 cursor.execute('''
                     INSERT INTO dashboard_products 
                     (asin, product_name, current_price, reference_price, discount_percentage, 
                      currency, availability_status, source_url, category, initial_price, 
                      extraction_method, historical_low_price, price_average, 
-                     purchase_recommendation, recommendation_confidence, historical_data_available,
-                     last_history_sync)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     purchase_recommendation, recommendation_confidence, historical_data_available)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     asin,
                     product_data.get('product_name', f'منتج {asin}'),
@@ -642,32 +622,29 @@ class EnhancedDatabase:
                     product_data.get('availability_status', 'active'),
                     product_data.get('source_url'),
                     product_data.get('category', 'غير مصنف'),
-                    current_price,  # السعر الأولي
+                    current_price,
                     extraction_method,
                     historical_low or 0.0,
                     price_average or 0.0,
                     recommendation,
                     confidence or 0.0,
-                    1 if historical_low is not None else 0,
-                    'CURRENT_TIMESTAMP' if historical_low is not None else None
+                    1 if historical_low is not None else 0
                 ))
                 
                 event_type = 'historical_product' if historical_low is not None else 'new_product'
                 self._log_update_event(event_type, asin, None, product_data.get('product_name', asin), 
                                      discount_percentage, extraction_method)
             
-            # حفظ في تاريخ الأسعار
             if current_price > 0:
                 cursor.execute('''
                     INSERT INTO price_history (asin, price, reference_price, discount_percentage, extraction_method)
                     VALUES (?, ?, ?, ?, ?)
                 ''', (asin, current_price, reference_price, discount_percentage, extraction_method))
             
-            # حفظ البيانات التاريخية التفصيلية إذا كانت متوفرة
             if historical_low is not None and historical_low > 0:
                 cursor.execute('''
                     INSERT INTO historical_price_data (asin, historical_low, price_average, data_source, analysis_date, days_analyzed)
-                    VALUES (?, ?, ?, ?, DATE('now'), ?)
+                    VALUES (?, ?, ?, ?, DATE("now"), ?)
                 ''', (asin, historical_low, price_average or current_price, 'camelcamelcamel', 
                      HISTORICAL_ANALYSIS_CONFIG['price_history_days']))
             
@@ -705,12 +682,11 @@ class EnhancedDatabase:
                 asin
             ))
             
-            # حفظ في جدول البيانات التاريخية
             if historical_data.get('historical_low_price', 0) > 0:
                 cursor.execute('''
                     INSERT INTO historical_price_data 
                     (asin, historical_low, historical_high, price_average, data_source, analysis_date, days_analyzed)
-                    VALUES (?, ?, ?, ?, ?, DATE('now'), ?)
+                    VALUES (?, ?, ?, ?, ?, DATE("now"), ?)
                 ''', (
                     asin,
                     historical_data.get('historical_low_price', 0),
@@ -781,13 +757,485 @@ class EnhancedDatabase:
             ))
             
             conn.commit()
-        except Exception as:
-            pass
+        except Exception as e:
+            logger.error(f"❌ خطأ في حفظ التوصية: {e}")
     
-    # ... باقي الدوال كما هي (get_products_for_monitoring, update_monitoring_time, إلخ)
-    # مع التأكد من أنها تستخدم الجداول والأعمدة الجديدة
+    def get_products_for_monitoring(self, limit: int = 50) -> List[Dict]:
+        """الحصول على المنتجات للمراقبة"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT asin, product_name, current_price, initial_price, source_url, 
+                       last_monitored, monitoring_enabled, extraction_method, last_extraction_status
+                FROM dashboard_products
+                WHERE availability_status = 'active' 
+                AND monitoring_enabled = 1
+                AND current_price > 0
+                ORDER BY 
+                    CASE 
+                        WHEN last_extraction_status = 'failed' THEN 1
+                        WHEN extraction_method = 'proxy' THEN 2
+                        ELSE 3
+                    END,
+                    last_monitored ASC NULLS FIRST, 
+                    last_updated DESC
+                LIMIT ?
+            ''', (limit,))
+            
+            products = []
+            for row in cursor.fetchall():
+                products.append({
+                    'asin': row[0],
+                    'product_name': row[1],
+                    'current_price': row[2],
+                    'initial_price': row[3] if row[3] else row[2],
+                    'source_url': row[4] or f"https://www.amazon.com/dp/{row[0]}",
+                    'last_monitored': row[5],
+                    'monitoring_enabled': bool(row[6]),
+                    'extraction_method': row[7] or 'direct',
+                    'last_extraction_status': row[8] or 'success'
+                })
+            
+            return products
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب المنتجات للمراقبة: {e}")
+            return []
+    
+    def update_monitoring_time(self, asin: str):
+        """تحديث وقت المراقبة الأخير"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE dashboard_products 
+                SET last_monitored = CURRENT_TIMESTAMP 
+                WHERE asin = ?
+            ''', (asin,))
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ خطأ في تحديث وقت المراقبة: {e}")
+    
+    def add_price_alert(self, asin: str, old_price: float, new_price: float, 
+                       drop_percentage: float, extraction_method: str = 'direct'):
+        """إضافة تنبيه انخفاض السعر"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO price_alerts (asin, old_price, new_price, drop_percentage, 
+                                        extraction_method, notified_email)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (asin, old_price, new_price, drop_percentage, 
+                 extraction_method, EMAIL_CONFIG['receiver_email']))
+            
+            conn.commit()
+            logger.info(f"⚠️  تم تسجيل تنبيه انخفاض السعر لـ {asin}: {drop_percentage:.1f}% (الطريقة: {extraction_method})")
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في تسجيل تنبيه السعر: {e}")
+    
+    def add_monitoring_log(self, asin: str, old_price: float, new_price: float, 
+                          status: str, message: str = "", extraction_method: str = None):
+        """إضافة سجل مراقبة"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            price_change = new_price - old_price if old_price and new_price else 0
+            
+            cursor.execute('''
+                INSERT INTO monitoring_logs (asin, old_price, new_price, price_change, 
+                                           extraction_method, status, message)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (asin, old_price, new_price, price_change, extraction_method, status, message))
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ خطأ في تسجيل سجل المراقبة: {e}")
+    
+    def mark_price_drop_detected(self, asin: str):
+        """تحديث حالة اكتشاف انخفاض السعر"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                UPDATE dashboard_products 
+                SET price_drop_detected = 1 
+                WHERE asin = ?
+            ''', (asin,))
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ خطأ في تحديث حالة انخفاض السعر: {e}")
+    
+    def get_recent_alerts(self, limit: int = 10) -> List[Dict]:
+        """الحصول على التنبيهات الحديثة"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT pa.asin, dp.product_name, pa.old_price, pa.new_price, 
+                       pa.drop_percentage, pa.alert_sent_at, pa.extraction_method
+                FROM price_alerts pa
+                LEFT JOIN dashboard_products dp ON pa.asin = dp.asin
+                ORDER BY pa.alert_sent_at DESC
+                LIMIT ?
+            ''', (limit,))
+            
+            alerts = []
+            for row in cursor.fetchall():
+                alerts.append({
+                    'asin': row[0],
+                    'product_name': row[1] if row[1] else f"منتج {row[0]}",
+                    'old_price': row[2],
+                    'new_price': row[3],
+                    'drop_percentage': row[4],
+                    'alert_sent_at': row[5],
+                    'extraction_method': row[6] or 'direct',
+                    'savings': row[2] - row[3] if row[2] and row[3] else 0
+                })
+            
+            return alerts
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب التنبيهات: {e}")
+            return []
+    
+    def get_monitoring_stats(self) -> Dict:
+        """الحصول على إحصائيات المراقبة"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT 
+                    COUNT(*) as total_monitored,
+                    COUNT(CASE WHEN price_drop_detected = 1 THEN 1 END) as drops_detected,
+                    COUNT(CASE WHEN last_monitored IS NOT NULL THEN 1 END) as recently_monitored,
+                    AVG(current_price) as avg_price,
+                    COUNT(CASE WHEN extraction_method = 'proxy' THEN 1 END) as proxy_used,
+                    COUNT(CASE WHEN last_extraction_status = 'failed' THEN 1 END) as failed_extractions
+                FROM dashboard_products 
+                WHERE monitoring_enabled = 1 AND availability_status = 'active'
+            ''')
+            
+            row = cursor.fetchone()
+            
+            cursor.execute('''
+                SELECT COUNT(*), MAX(alert_sent_at)
+                FROM price_alerts
+                WHERE DATE(alert_sent_at) = DATE("now")
+            ''')
+            
+            alerts_row = cursor.fetchone()
+            
+            return {
+                'total_monitored': row[0] if row else 0,
+                'drops_detected': row[1] if row else 0,
+                'recently_monitored': row[2] if row else 0,
+                'avg_price': round(row[3], 2) if row and row[3] else 0.0,
+                'proxy_used': row[4] if row else 0,
+                'failed_extractions': row[5] if row else 0,
+                'alerts_today': alerts_row[0] if alerts_row else 0,
+                'last_alert': alerts_row[1] if alerts_row and alerts_row[1] else None
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب إحصائيات المراقبة: {e}")
+            return {}
+    
+    def get_display_stats(self) -> Dict:
+        """الحصول على إحصائيات العرض"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT 
+                    total_products, active_products, avg_price, avg_discount, best_deal_percentage
+                FROM display_stats 
+                ORDER BY created_date DESC 
+                LIMIT 1
+            ''')
+            
+            row = cursor.fetchone()
+            
+            if row:
+                return {
+                    'total_products': row[0] or 0,
+                    'active_products': row[1] or 0,
+                    'avg_price': row[2] or 0.0,
+                    'avg_discount': row[3] or 0.0,
+                    'best_deal_percentage': row[4] or 0.0
+                }
+            
+            return {'total_products': 0, 'active_products': 0, 'avg_price': 0.0, 'avg_discount': 0.0}
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب إحصائيات العرض: {e}")
+            return {'total_products': 0, 'active_products': 0, 'avg_price': 0.0, 'avg_discount': 0.0}
+    
+    def _update_display_stats(self):
+        """تحديث إحصائيات العرض"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN availability_status = 'active' THEN 1 END) as active,
+                    AVG(current_price) as avg_price,
+                    AVG(discount_percentage) as avg_discount,
+                    MAX(discount_percentage) as best_deal
+                FROM dashboard_products
+                WHERE current_price > 0
+            ''')
+            
+            row = cursor.fetchone()
+            
+            today = datetime.now().date().isoformat()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO display_stats 
+                (created_date, total_products, active_products, avg_price, avg_discount, best_deal_percentage, last_refresh)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (
+                today, 
+                row[0] if row else 0, 
+                row[1] if row else 0, 
+                row[2] if row else 0.0,
+                row[3] if row else 0.0,
+                row[4] if row else 0.0
+            ))
+            
+            conn.commit()
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في تحديث الإحصائيات: {e}")
+    
+    def _log_update_event(self, event_type: str, asin: str, old_value: str = None, 
+                         new_value: str = None, discount_change: float = 0.0, 
+                         extraction_method: str = None):
+        """تسجيل حدث تحديث"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO update_events (event_type, asin, old_value, new_value, 
+                                         discount_change, extraction_method)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (event_type, asin, old_value, new_value, discount_change, extraction_method))
+            
+            conn.commit()
+        except Exception as e:
+            logger.error(f"❌ خطأ في تسجيل الحدث: {e}")
+    
+    def get_all_products(self, limit: int = 100, offset: int = 0) -> List[Dict]:
+        """الحصول على جميع المنتجات"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT asin, product_name, current_price, reference_price, discount_percentage,
+                       currency, availability_status, last_updated, source_url, category,
+                       price_change_count, initial_price, monitoring_enabled, price_drop_detected,
+                       extraction_method, last_extraction_status, historical_low_price,
+                       price_average, last_history_sync, historical_data_available,
+                       purchase_recommendation, recommendation_confidence
+                FROM dashboard_products
+                ORDER BY last_updated DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            
+            products = []
+            for row in cursor.fetchall():
+                products.append({
+                    'asin': row[0],
+                    'product_name': row[1] or f"منتج {row[0]}",
+                    'current_price': row[2],
+                    'reference_price': row[3],
+                    'discount_percentage': row[4],
+                    'currency': row[5],
+                    'availability_status': row[6],
+                    'last_updated': row[7],
+                    'source_url': row[8],
+                    'category': row[9] or 'غير مصنف',
+                    'price_change_count': row[10] or 0,
+                    'initial_price': row[11],
+                    'monitoring_enabled': bool(row[12]) if row[12] is not None else True,
+                    'price_drop_detected': bool(row[13]) if row[13] is not None else False,
+                    'extraction_method': row[14] or 'direct',
+                    'last_extraction_status': row[15] or 'success',
+                    'historical_low_price': row[16] or 0.0,
+                    'price_average': row[17] or 0.0,
+                    'last_history_sync': row[18],
+                    'historical_data_available': bool(row[19]) if row[19] is not None else False,
+                    'purchase_recommendation': row[20],
+                    'recommendation_confidence': row[21] or 0.0,
+                    'has_discount': row[3] and row[3] > row[2] and row[2] > 0
+                })
+            
+            return products
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب المنتجات: {e}")
+            return []
+    
+    def search_products(self, query: str, limit: int = 20) -> List[Dict]:
+        """البحث عن منتجات"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            search_term = f"%{query}%"
+            
+            cursor.execute('''
+                SELECT asin, product_name, current_price, reference_price, discount_percentage,
+                       currency, availability_status, last_updated, category, extraction_method,
+                       historical_low_price, purchase_recommendation
+                FROM dashboard_products
+                WHERE asin LIKE ? OR product_name LIKE ? OR category LIKE ?
+                ORDER BY last_updated DESC
+                LIMIT ?
+            ''', (search_term, search_term, search_term, limit))
+            
+            products = []
+            for row in cursor.fetchall():
+                products.append({
+                    'asin': row[0],
+                    'product_name': row[1] or f"منتج {row[0]}",
+                    'current_price': row[2],
+                    'reference_price': row[3],
+                    'discount_percentage': row[4],
+                    'currency': row[5],
+                    'availability_status': row[6],
+                    'last_updated': row[7],
+                    'category': row[8] or 'غير مصنف',
+                    'extraction_method': row[9] or 'direct',
+                    'historical_low_price': row[10] or 0.0,
+                    'purchase_recommendation': row[11],
+                    'has_discount': row[3] and row[3] > row[2] and row[2] > 0
+                })
+            
+            return products
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في البحث: {e}")
+            return []
+    
+    def get_best_deals(self, min_discount: float = 20.0, limit: int = 10) -> List[Dict]:
+        """الحصول على أفضل العروض"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT asin, product_name, current_price, reference_price, discount_percentage,
+                       currency, last_updated, category, extraction_method
+                FROM dashboard_products
+                WHERE discount_percentage >= ? AND current_price > 0 AND availability_status = 'active'
+                ORDER BY discount_percentage DESC, current_price ASC
+                LIMIT ?
+            ''', (min_discount, limit))
+            
+            deals = []
+            for row in cursor.fetchall():
+                deals.append({
+                    'asin': row[0],
+                    'product_name': row[1] or f"منتج {row[0]}",
+                    'current_price': row[2],
+                    'reference_price': row[3],
+                    'discount_percentage': row[4],
+                    'currency': row[5],
+                    'last_updated': row[6],
+                    'category': row[7] or 'غير مصنف',
+                    'extraction_method': row[8] or 'direct'
+                })
+            
+            return deals
+            
+        except Exception as e:
+            logger.error(f"❌ خطأ في جلب العروض: {e}")
+            return []
+    
+    def close(self):
+        """إغلاق الاتصالات"""
+        with self.lock:
+            if hasattr(self.local, 'connection'):
+                try:
+                    self.local.connection.close()
+                except Exception:
+                    pass
 
-# ==================== نظام الاستخلاص المعزز مع استخراج ASIN ====================
+# ==================== نظام الإشعارات البريدية ====================
+class EmailNotifier:
+    """نظام إرسال الإشعارات البريدية"""
+    
+    @staticmethod
+    def send_price_drop_alert(asin: str, product_name: str, old_price: float, 
+                            new_price: float, drop_percentage: float, 
+                            product_url: str = None, extraction_method: str = 'direct'):
+        """إرسال إشعار انخفاض السعر"""
+        if not MONITORING_CONFIG['email_notifications']:
+            print(f"📧 (محاكاة) إشعار انخفاض السعر لـ {asin}: {drop_percentage:.1f}% (الطريقة: {extraction_method})")
+            return True
+        
+        try:
+            cleaned_password = EMAIL_CONFIG['sender_password'].replace(' ', '')
+            
+            subject = f"🚨 انخفاض كبير في السعر! {product_name[:50]}..."
+            body = f"""
+            اكتشف نظام المراقبة انخفاضاً كبيراً في سعر المنتج:
+            
+            📦 المنتج: {product_name}
+            🔢 كود المنتج: {asin}
+            
+            💰 السعر السابق: ${old_price:.2f}
+            💰 السعر الحالي: ${new_price:.2f}
+            
+            📉 نسبة الانخفاض: {drop_percentage:.1f}%
+            💵 التوفير: ${old_price - new_price:.2f}
+            
+            🛠️  طريقة الاستخلاص: {extraction_method}
+            
+            🔗 رابط المنتج: {product_url or f"https://www.amazon.com/dp/{asin}"}
+            
+            ⏰ وقت الاكتشاف: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            
+            هذا الإشعار تلقائي من نظام مراقبة الأسعار.
+            """
+            
+            msg = MIMEText(body, 'plain')
+            msg['From'] = EMAIL_CONFIG['sender_email']
+            msg['To'] = EMAIL_CONFIG['receiver_email']
+            msg['Subject'] = subject
+            
+            server = smtplib.SMTP(EMAIL_CONFIG['smtp_server'], EMAIL_CONFIG['smtp_port'])
+            server.starttls()
+            server.login(EMAIL_CONFIG['sender_email'], cleaned_password)
+            server.send_message(msg)
+            server.quit()
+            
+            logger.info(f"📧 تم إرسال إشعار انخفاض السعر لـ {asin} إلى {EMAIL_CONFIG['receiver_email']}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ فشل إرسال الإشعار البريدية: {e}")
+            print(f"📧 (محاكاة) إشعار انخفاض السعر لـ {asin}: {drop_percentage:.1f}%")
+            return True
+
+# ==================== نظام استخلاص مع الوسيط الذكي ====================
 class DiscountAwareAmazonExtractor:
     """مستخلص ذكي مع تتبع الأسعار المرجعية والخصومات والوسيط"""
     
@@ -816,22 +1264,20 @@ class DiscountAwareAmazonExtractor:
             self.session = None
             self.ua_generator = None
             self.browser_simulator = None
-    
+        
     def extract_asin_from_url(self, url: str) -> Optional[str]:
         """🔥 استخراج ASIN من رابط Amazon.com - التنظيف الذكي"""
         try:
-            # إزالة المتغيرات الزائدة والتنظيف
             parsed_url = urlparse(url)
             clean_path = parsed_url.path
             
-            # البحث في المسار أولاً
             patterns = [
-                r'/dp/([A-Z0-9]{10})',  # النمط الأساسي
+                r'/dp/([A-Z0-9]{10})',
                 r'/gp/product/([A-Z0-9]{10})',
                 r'/product/([A-Z0-9]{10})',
                 r'/exec/obidos/ASIN/([A-Z0-9]{10})',
                 r'/d/([A-Z0-9]{10})',
-                r'/([A-Z0-9]{10})(?:[/?&]|$)',  # النمط العام
+                r'/([A-Z0-9]{10})(?:[/?&]|$)',
             ]
             
             for pattern in patterns:
@@ -841,23 +1287,19 @@ class DiscountAwareAmazonExtractor:
                     if len(asin) == 10 and asin.isalnum():
                         return asin
             
-            # البحث في استعلام URL إذا لم يتم العثور في المسار
             query_params = parse_qs(parsed_url.query)
             
-            # البحث عن asin في الاستعلام
             if 'asin' in query_params:
                 asin = query_params['asin'][0].upper()
                 if len(asin) == 10 and asin.isalnum():
                     return asin
             
-            # البحث عن أية معلمات أخرى قد تحتوي على ASIN
             for param_name in ['ASIN', 'asin', 'product_id', 'productID']:
                 if param_name in query_params:
                     potential_asin = query_params[param_name][0].upper()
                     if len(potential_asin) == 10 and potential_asin.isalnum():
                         return potential_asin
             
-            # البحث في الرابط الكامل كملاذ أخير
             full_pattern = r'(?:[/=])([A-Z0-9]{10})(?:[/?&]|$)'
             match = re.search(full_pattern, url, re.IGNORECASE)
             if match:
@@ -871,7 +1313,345 @@ class DiscountAwareAmazonExtractor:
             logger.error(f"❌ خطأ في استخراج ASIN: {e}")
             return None
     
-    # ... باقي الدوال كما هي (extract_price, _extract_with_discount_awareness, إلخ)
+    def extract_price(self, url: str) -> Tuple[Optional[Dict], str, str]:
+        """استخلاص السعر مع تتبع الأسعار المرجعية والخصومات"""
+        extraction_method = "direct"
+        attempts_log = []
+        
+        try:
+            if not self.session:
+                return None, "مكتبات الاستخلاص غير مثبتة", extraction_method
+            
+            if 'amazon.com' not in url.lower():
+                return None, "النظام يدعم Amazon.com فقط", extraction_method
+            
+            asin = self.extract_asin_from_url(url)
+            if not asin:
+                return None, "لم يتم العثور على ASIN في الرابط", extraction_method
+            
+            if PROXY_CONFIG.get('use_direct_first', True):
+                logger.info(f"🔍 المحاولة 1: استخلاص مباشر لـ {asin}")
+                
+                headers = self._get_global_headers()
+                parsed_url = urlparse(url)
+                headers['Referer'] = f"{parsed_url.scheme}://{parsed_url.netloc}/"
+                
+                time.sleep(random.uniform(2, 4))
+                
+                try:
+                    response = self.session.get(
+                        url, 
+                        headers=headers, 
+                        timeout=20, 
+                        allow_redirects=True
+                    )
+                    
+                    if response.status_code == 200:
+                        html_content = response.text
+                        product_data = self._extract_with_discount_awareness(html_content, asin)
+                        
+                        if product_data:
+                            product_data['url'] = url
+                            extraction_method = "direct"
+                            logger.info(f"✅ نجاح الاستخلاص المباشر لـ {asin}")
+                            return product_data, "تم الاستخلاص بنجاح (مباشر)", extraction_method
+                    else:
+                        logger.warning(f"⚠️  فشل مباشر لـ {asin}: {response.status_code}")
+                        attempts_log.append(f"مباشر: {response.status_code}")
+                except Exception as e:
+                    logger.warning(f"⚠️  خطأ في الاستخلاص المباشر لـ {asin}: {str(e)[:100]}")
+                    attempts_log.append(f"مباشر خطأ: {str(e)[:50]}")
+            
+            if self.browser_simulator:
+                logger.info(f"🔍 المحاولة 2: استخلاص ذكي لـ {asin}")
+                
+                response, smart_attempts = self.browser_simulator.smart_get_request(
+                    url, 
+                    max_retries=2,
+                    use_proxy=False
+                )
+                
+                if response and response.status_code == 200:
+                    html_content = response.text
+                    product_data = self._extract_with_discount_awareness(html_content, asin)
+                    
+                    if product_data:
+                        product_data['url'] = url
+                        extraction_method = "smart"
+                        logger.info(f"✅ نجاح الاستخلاص الذكي لـ {asin}")
+                        return product_data, "تم الاستخلاص بنجاح (ذكي)", extraction_method
+                else:
+                    logger.warning(f"⚠️  فشل ذكي لـ {asin}")
+                    attempts_log.extend([f"ذكي: {a['status']}" for a in smart_attempts])
+            
+            if PROXY_CONFIG.get('retry_with_proxy', True) and PROXY_CONFIG.get('scraperapi_key'):
+                logger.info(f"🔍 المحاولة 3: استخلاص بالوسيط لـ {asin}")
+                
+                proxy_url = self._get_proxy_url(url)
+                if proxy_url:
+                    try:
+                        headers = self._get_global_headers()
+                        time.sleep(random.uniform(3, 6))
+                        
+                        response = self.session.get(
+                            proxy_url,
+                            headers=headers,
+                            timeout=PROXY_CONFIG['timeout'],
+                            allow_redirects=True
+                        )
+                        
+                        if response.status_code == 200:
+                            html_content = response.text
+                            product_data = self._extract_with_discount_awareness(html_content, asin)
+                            
+                            if product_data:
+                                product_data['url'] = url
+                                extraction_method = "proxy"
+                                logger.info(f"✅ نجاح الاستخلاص بالوسيط لـ {asin}")
+                                return product_data, "تم الاستخلاص بنجاح (وسيط)", extraction_method
+                        else:
+                            logger.warning(f"⚠️  فشل وسيط لـ {asin}: {response.status_code}")
+                            attempts_log.append(f"وسيط: {response.status_code}")
+                    except Exception as e:
+                        logger.warning(f"⚠️  خطأ في الاستخلاص بالوسيط لـ {asin}: {str(e)[:100]}")
+                        attempts_log.append(f"وسيط خطأ: {str(e)[:50]}")
+            
+            error_msg = f"فشل جميع طرق الاستخلاص. المحاولات: {', '.join(attempts_log)}"
+            logger.error(f"❌ {error_msg}")
+            return None, error_msg, "failed"
+            
+        except Exception as e:
+            error_msg = f"خطأ عام في الاستخلاص: {str(e)[:200]}"
+            logger.error(f"❌ {error_msg}")
+            return None, error_msg, extraction_method
+    
+    def _get_proxy_url(self, url):
+        """إنشاء رابط الوسيط"""
+        if not PROXY_CONFIG.get('scraperapi_key'):
+            return None
+        
+        try:
+            encoded_url = quote(url, safe='')
+            proxy_url = f"{PROXY_CONFIG['scraperapi_url']}/?api_key={PROXY_CONFIG['scraperapi_key']}&url={encoded_url}"
+            proxy_url += "&render=true&country_code=us&device_type=desktop&session_number=1"
+            return proxy_url
+        except Exception:
+            return None
+    
+    def _get_global_headers(self) -> Dict:
+        """إرجاع رأسيات موحدة"""
+        try:
+            user_agent = self.ua_generator.random if self.ua_generator else 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+        except Exception:
+            user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+        
+        return {
+            'User-Agent': user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
+            'TE': 'trailers'
+        }
+    
+    def _extract_with_discount_awareness(self, html: str, asin: str) -> Optional[Dict]:
+        """استخراج البيانات مع وعي الخصومات"""
+        
+        current_price_data = self._extract_current_price(html, asin)
+        if not current_price_data:
+            return None
+        
+        reference_price_data = self._extract_reference_price(html, asin)
+        
+        current_price = current_price_data.get('price', 0.0)
+        reference_price = reference_price_data.get('reference_price', 0.0)
+        discount_percentage = 0.0
+        
+        if reference_price > current_price > 0:
+            discount_percentage = ((reference_price - current_price) / reference_price) * 100
+        
+        title = self._extract_product_title(html)
+        
+        return {
+            'asin': asin,
+            'price': current_price,
+            'reference_price': reference_price,
+            'discount_percentage': round(discount_percentage, 1),
+            'currency': 'USD',
+            'title': title or f'منتج {asin}'
+        }
+    
+    def _extract_current_price(self, html: str, asin: str) -> Optional[Dict]:
+        """استخراج السعر الحالي"""
+        try:
+            price_patterns = [
+                (r'"priceCurrency":"USD".*?"price":"([\d.]+)"', 1),
+                (r'data-a-price="\d*\.?\d*".*?>\s*([\$\d.,]+)\s*<', 0),
+                (r'<span[^>]*id="price_inside_buybox"[^>]*>\s*([\$\d.,]+)\s*</span>', 0),
+                (r'<span[^>]*id="priceblock_ourprice"[^>]*>\s*([\$\d.,]+)\s*</span>', 0),
+                (r'<span[^>]*id="priceblock_dealprice"[^>]*>\s*([\$\d.,]+)\s*</span>', 0),
+                (r'<span[^>]*class="a-price-whole"[^>]*>([\d,]+)</span>', 0),
+                (r'<span[^>]*class="a-price[^"]*"[^>]*>.*?<span[^>]*class="a-offscreen"[^>]*>(.*?)</span>', 0),
+                (r'<span[^>]*class="apexPriceToPay"[^>]*>.*?<span[^>]*class="a-offscreen"[^>]*>(.*?)</span>', 0),
+                (r'\$\s*([\d,]+\.?\d*)(?![^<]*?</span>)', 1),
+                (r'>\s*\$\s*([\d,]+\.?\d*)\s*<', 1),
+                (r'"displayPrice":"\$([\d.]+)"', 1),
+                (r'"formattedPrice":"\$([\d.]+)"', 1),
+            ]
+            
+            for pattern, group_idx in price_patterns:
+                matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        price_text = match[group_idx]
+                    else:
+                        price_text = match
+                    
+                    price = self._extract_usd_price_from_text(price_text)
+                    
+                    if price and self._is_valid_usd_price(price):
+                        return {'price': price}
+                        
+        except Exception:
+            pass
+        
+        return None
+    
+    def _extract_reference_price(self, html: str, asin: str) -> Optional[Dict]:
+        """استخراج السعر المرجعي"""
+        try:
+            reference_patterns = [
+                (r'<span[^>]*class="a-price a-text-price"[^>]*>.*?<span[^>]*class="a-offscreen"[^>]*>(.*?)</span>', 0),
+                (r'<span[^>]*class="a-text-strike"[^>]*>(.*?)</span>', 0),
+                (r'<s[^>]*class="a-text-strike"[^>]*>(.*?)</s>', 0),
+                (r'<span[^>]*style="text-decoration: line-through"[^>]*>(.*?)</span>', 0),
+                (r'>\s*List Price:\s*</span>.*?\$\s*([\d,]+\.?\d*)', 1),
+                (r'>\s*MSRP:\s*</span>.*?\$\s*([\d,]+\.?\d*)', 1),
+                (r'>\s*Was:\s*</span>.*?\$\s*([\d,]+\.?\d*)', 1),
+                (r'>\s*Original price:\s*</span>.*?\$\s*([\d,]+\.?\d*)', 1),
+                (r'>\s*Price Was:\s*</span>.*?\$\s*([\d,]+\.?\d*)', 1),
+                (r'>\s*Suggested Retail Price:\s*</span>.*?\$\s*([\d,]+\.?\d*)', 1),
+                (r'"priceCurrency":"USD".*?"price":"([\d.]+)"', 1),
+                (r'"highPrice":\s*([\d.]+)', 1),
+                (r'"listPrice":\s*([\d.]+)', 1),
+                (r'"strikePrice":\s*([\d.]+)', 1),
+            ]
+            
+            best_reference_price = 0.0
+            
+            for pattern, group_idx in reference_patterns:
+                match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+                if match:
+                    price_text = match.group(group_idx).strip()
+                    price = self._extract_usd_price_from_text(price_text)
+                    
+                    if price and self._is_valid_usd_price(price):
+                        if price > best_reference_price:
+                            best_reference_price = price
+            
+            if best_reference_price > 0:
+                return {'reference_price': best_reference_price}
+                
+        except Exception:
+            pass
+        
+        return {'reference_price': 0.0}
+    
+    def _extract_product_title(self, html: str) -> Optional[str]:
+        """استخراج عنوان المنتج"""
+        try:
+            title_patterns = [
+                r'<h1[^>]*id="title"[^>]*>(.*?)</h1>',
+                r'<span[^>]*id="productTitle"[^>]*>(.*?)</span>',
+                r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"',
+                r'<title[^>]*>(.*?)</title>',
+                r'"title":"([^"]+)"',
+            ]
+            
+            for pattern in title_patterns:
+                match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+                if match:
+                    title = match.group(1).strip()
+                    title = re.sub(r'<[^>]*>', '', title)
+                    title = re.sub(r'\s+', ' ', title).strip()
+                    title = title.replace('Amazon.com', '').strip()
+                    
+                    if title and len(title) > 5:
+                        return title[:200]
+                        
+        except Exception:
+            pass
+        
+        return None
+    
+    def _extract_usd_price_from_text(self, text: str) -> Optional[float]:
+        """استخراج السعر USD من نص معين"""
+        try:
+            text = re.sub(r'<[^>]*>', '', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            usd_patterns = [
+                r'\$\s*([\d,]+\.?\d*)',
+                r'USD\s*([\d,]+\.?\d*)',
+                r'([\d,]+\.?\d*)\s*\$',
+                r'([\d,]+\.?\d*)\s*USD',
+            ]
+            
+            for pattern in usd_patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    price_str = match.group(1).replace(',', '')
+                    return self._safe_float_convert(price_str)
+                    
+        except Exception:
+            pass
+        
+        return None
+    
+    def _is_valid_usd_price(self, price: float) -> bool:
+        """التحقق من صحة السعر USD"""
+        if not price or price <= 0:
+            return False
+        
+        if price < 0.5:
+            return False
+        
+        if price > 100000:
+            return False
+        
+        return True
+    
+    def _safe_float_convert(self, value: Any) -> Optional[float]:
+        """تحويل آمن للقيمة إلى عدد عشري"""
+        try:
+            if value is None:
+                return None
+            
+            str_value = str(value).strip()
+            cleaned = re.sub(r'[^\d.,]', '', str_value)
+            
+            if ',' in cleaned and '.' in cleaned:
+                cleaned = cleaned.replace(',', '')
+            elif ',' in cleaned:
+                if cleaned.count(',') == 1 and len(cleaned.split(',')[1]) <= 2:
+                    cleaned = cleaned.replace(',', '.')
+                else:
+                    cleaned = cleaned.replace(',', '')
+            
+            result = float(cleaned) if cleaned else None
+            
+            if result and 0.1 <= result <= 1000000:
+                return result
+            else:
+                return None
+                
+        except (ValueError, TypeError, AttributeError):
+            return None
 
 # ==================== نظام التحليل التاريخي الذكي ====================
 class HistoricalPriceAnalyzer:
@@ -898,10 +1678,8 @@ class HistoricalPriceAnalyzer:
             return None
         
         try:
-            # 🔥 بناء رابط CamelCamelCamel باستخدام المفتاح كجسر عبور
             base_url = f"{HISTORICAL_ANALYSIS_CONFIG['camel_endpoint']}/product/{asin}"
             
-            # 🔥 إضافة المفتاح كمعلمة للوصول
             params = {
                 'api_key': HISTORICAL_ANALYSIS_CONFIG['camel_api_key'],
                 'days': HISTORICAL_ANALYSIS_CONFIG['price_history_days']
@@ -939,10 +1717,9 @@ class HistoricalPriceAnalyzer:
             historical_low = 0.0
             price_average = 0.0
             
-            # 🔥 أنماط متقدمة للبحث عن "أقل سعر تاريخي"
             low_price_patterns = [
-                r'Lowest Price.*?\$([\d,]+\.?\d{2})',  # Lowest Price: $123.45
-                r'أقل سعر.*?\$([\d,]+\.?\d{2})',  # نمط عربي
+                r'Lowest Price.*?\$([\d,]+\.?\d{2})',
+                r'أقل سعر.*?\$([\d,]+\.?\d{2})',
                 r'Historical Low.*?\$([\d,]+\.?\d{2})',
                 r'data-lowest-price="\$([\d,]+\.?\d{2})"',
                 r'"lowest_price":\s*([\d,]+\.?\d{2})',
@@ -951,7 +1728,6 @@ class HistoricalPriceAnalyzer:
                 r'All Time Low.*?\$([\d,]+\.?\d{2})',
             ]
             
-            # 🔥 أنماط متقدمة للبحث عن "متوسط السعر"
             avg_price_patterns = [
                 r'Average Price.*?\$([\d,]+\.?\d{2})',
                 r'متوسط السعر.*?\$([\d,]+\.?\d{2})',
@@ -962,7 +1738,6 @@ class HistoricalPriceAnalyzer:
                 r'Price Average.*?\$([\d,]+\.?\d{2})',
             ]
             
-            # البحث عن أقل سعر
             for pattern in low_price_patterns:
                 match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
                 if match:
@@ -972,7 +1747,6 @@ class HistoricalPriceAnalyzer:
                         logger.info(f"✅ تم العثور على أقل سعر تاريخي لـ {asin}: ${historical_low:.2f}")
                         break
             
-            # البحث عن متوسط السعر
             for pattern in avg_price_patterns:
                 match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
                 if match:
@@ -982,7 +1756,6 @@ class HistoricalPriceAnalyzer:
                         logger.info(f"✅ تم العثور على متوسط سعر لـ {asin}: ${price_average:.2f}")
                         break
             
-            # إذا لم نجد متوسط سعر، نستخدم أقل سعر * 1.2 كتقدير
             if historical_low > 0 and price_average == 0:
                 price_average = historical_low * 1.2
                 logger.info(f"📊 تم تقدير متوسط السعر لـ {asin}: ${price_average:.2f}")
@@ -1042,14 +1815,10 @@ class HistoricalPriceAnalyzer:
                     'price_vs_low_percentage': 0.0
                 }
             
-            # 🔥 المعادلة الذكية: (السعر الحالي - أقل سعر تاريخي) / أقل سعر تاريخي
             price_vs_low = ((current_price - historical_low) / historical_low) * 100
-            
-            # 🔥 المعادلة الثانية: نسبة السعر الحالي إلى المتوسط
             price_vs_avg = ((current_price - price_average) / price_average) * 100
             
-            # توليد التوصية بناءً على النتائج
-            if price_vs_low <= 5:  # السعر الحالي قريب جداً من الأدنى التاريخي
+            if price_vs_low <= 5:
                 recommendation = {
                     'recommendation_type': 'excellent_deal',
                     'confidence_score': 95.0,
@@ -1073,7 +1842,7 @@ class HistoricalPriceAnalyzer:
                     'price_vs_low_percentage': round(price_vs_low, 1),
                     'price_vs_avg_percentage': round(price_vs_avg, 1)
                 }
-            elif price_vs_avg < 0:  # السعر أقل من المتوسط
+            elif price_vs_avg < 0:
                 recommendation = {
                     'recommendation_type': 'fair_deal',
                     'confidence_score': 50.0,
@@ -1090,7 +1859,6 @@ class HistoricalPriceAnalyzer:
                     'price_vs_avg_percentage': round(price_vs_avg, 1)
                 }
             
-            # إضافة تفاصيل إضافية
             recommendation.update({
                 'current_price': current_price,
                 'historical_low': historical_low,
@@ -1123,14 +1891,12 @@ class DiscountDashboardIntegrator:
     def sync_product_with_historical_analysis(self, url: str) -> Tuple[Optional[Dict], str, str]:
         """🔥 مزامنة منتج مع التحليل التاريخي الذكي"""
         try:
-            # استخلاص ASIN أولاً
             asin = self.extractor.extract_asin_from_url(url)
             if not asin:
                 return None, "❌ لم يتم العثور على ASIN صالح في الرابط", "failed"
             
             logger.info(f"🔍 بدء التحليل الشامل للمنتج: {asin}")
             
-            # استخلاص السعر الحالي
             price_data, message, extraction_method = self.extractor.extract_price(url)
             if not price_data:
                 return None, f"❌ فشل استخلاص السعر: {message}", extraction_method
@@ -1139,7 +1905,6 @@ class DiscountDashboardIntegrator:
             if current_price <= 0:
                 return None, "❌ سعر غير صالح", extraction_method
             
-            # 🔥 جلب البيانات التاريخية إذا كان النظام مفعلاً
             historical_data = None
             recommendation = None
             
@@ -1147,14 +1912,12 @@ class DiscountDashboardIntegrator:
                 historical_data = self.historical_analyzer.fetch_historical_data(asin)
                 
                 if historical_data:
-                    # 🔥 توليد توصية الشراء الذكية
                     recommendation = self.historical_analyzer.generate_purchase_recommendation(
                         current_price=current_price,
                         historical_low=historical_data['historical_low_price'],
                         price_average=historical_data['price_average']
                     )
             
-            # تجهيز البيانات للمزامنة
             dashboard_data = {
                 'asin': asin,
                 'product_name': price_data.get('title', f'منتج {asin}'),
@@ -1168,7 +1931,6 @@ class DiscountDashboardIntegrator:
                 'extraction_method': extraction_method
             }
             
-            # إضافة البيانات التاريخية إذا كانت متوفرة
             if historical_data:
                 dashboard_data.update({
                     'historical_low_price': historical_data['historical_low_price'],
@@ -1177,11 +1939,9 @@ class DiscountDashboardIntegrator:
                     'recommendation_confidence': recommendation['confidence_score'] if recommendation else 0.0
                 })
             
-            # المزامنة مع قاعدة البيانات
             success = self.dashboard_db.save_or_update_product(dashboard_data)
             
             if success:
-                # حفظ التوصية إذا كانت متوفرة
                 if recommendation:
                     self.dashboard_db.save_purchase_recommendation(asin, recommendation)
                 
@@ -1195,7 +1955,6 @@ class DiscountDashboardIntegrator:
                     'has_historical_data': historical_data is not None
                 }
                 
-                # إضافة البيانات التاريخية إذا كانت متوفرة
                 if historical_data:
                     response_data.update({
                         'historical_low_price': historical_data['historical_low_price'],
@@ -1232,18 +1991,12 @@ class EnhancedDashboardSystem:
     def __init__(self):
         print("\n🔧 جاري تهيئة النظام المحسن مع النظام التاريخي الذكي...")
         
-        # تهيئة قاعدة البيانات
         self.dashboard_db = EnhancedDatabase("dashboard_control.db")
-        
-        # تهيئة المكونات
         self.extractor = DiscountAwareAmazonExtractor()
         self.historical_analyzer = HistoricalPriceAnalyzer()
         self.integrator = DiscountDashboardIntegrator(self.dashboard_db)
         
-        # تحميل المنتجات الحالية
         self._load_initial_products()
-        
-        # إعداد مسارات API
         self.setup_routes()
         
         print("\n" + "="*70)
@@ -1339,80 +2092,60 @@ class EnhancedDashboardSystem:
                     }
                 </style>
                 <script>
-                    // تحميل البيانات الأولية
                     document.addEventListener('DOMContentLoaded', function() {
                         loadDashboardStats();
                         loadHistoricalStats();
                         loadProductsTable();
                         loadBestDeals();
                         
-                        // تحديث تلقائي كل 30 ثانية
                         setInterval(() => {
                             loadDashboardStats();
                             loadHistoricalStats();
                         }, 30000);
                     });
                     
-                    // تحميل إحصائيات النظام
                     async function loadDashboardStats() {
                         try {
                             const response = await fetch('/api/dashboard-stats');
                             const data = await response.json();
-                            
-                            if (data.status === 'success') {
-                                updateStatsDisplay(data.stats);
-                            }
+                            if (data.status === 'success') updateStatsDisplay(data.stats);
                         } catch (error) {
                             console.error('Error loading stats:', error);
                         }
                     }
                     
-                    // تحميل إحصائيات النظام التاريخي
                     async function loadHistoricalStats() {
                         try {
                             const response = await fetch('/api/historical-stats');
                             const data = await response.json();
-                            
-                            if (data.status === 'success') {
-                                updateHistoricalDisplay(data);
-                            }
+                            if (data.status === 'success') updateHistoricalDisplay(data);
                         } catch (error) {
                             console.error('Error loading historical stats:', error);
                         }
                     }
                     
-                    // تحميل جدول المنتجات
                     async function loadProductsTable() {
                         const tableBody = document.getElementById('productsTableBody');
                         tableBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 30px;">جاري تحميل البيانات...</td></tr>';
-                        
                         try {
                             const response = await fetch('/api/dashboard-products?limit=30');
                             const data = await response.json();
-                            
-                            if (data.status === 'success') {
-                                updateProductsTable(data.products);
-                            }
+                            if (data.status === 'success') updateProductsTable(data.products);
                         } catch (error) {
                             tableBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 30px; color: #f44336;">خطأ في تحميل البيانات</td></tr>';
                         }
                     }
                     
-                    // تحميل أفضل العروض
                     async function loadBestDeals() {
                         try {
                             const response = await fetch('/api/best-historical-deals');
                             const data = await response.json();
-                            
-                            if (data.status === 'success') {
-                                updateBestDeals(data.deals);
-                            }
+                            if (data.status === 'success') updateBestDeals(data.deals);
                         } catch (error) {
                             console.error('Error loading best deals:', error);
                         }
                     }
                     
-                    // تحديث عرض الإحصائيات
                     function updateStatsDisplay(stats) {
                         document.getElementById('totalProducts').textContent = stats.total_products.toLocaleString();
                         document.getElementById('activeProducts').textContent = stats.active_products.toLocaleString();
@@ -1420,27 +2153,22 @@ class EnhancedDashboardSystem:
                         document.getElementById('avgDiscount').textContent = stats.avg_discount.toLocaleString() + '%';
                     }
                     
-                    // تحديث عرض الإحصائيات التاريخية
                     function updateHistoricalDisplay(data) {
                         const stats = data.stats;
-                        
                         document.getElementById('historicalProducts').textContent = stats.historical_products.toLocaleString();
                         document.getElementById('excellentDeals').textContent = stats.excellent_deals.toLocaleString();
                         document.getElementById('goodDeals').textContent = stats.good_deals.toLocaleString();
                         document.getElementById('avgSavings').textContent = '$' + stats.avg_savings.toLocaleString();
                     }
                     
-                    // تحديث جدول المنتجات
                     function updateProductsTable(products) {
                         const tableBody = document.getElementById('productsTableBody');
-                        
                         if (products.length === 0) {
                             tableBody.innerHTML = '<tr><td colspan="12" style="text-align: center; padding: 30px;">لا توجد منتجات بعد. ابدأ بإضافة منتج جديد!</td></tr>';
                             return;
                         }
                         
                         let html = '';
-                        
                         products.forEach(product => {
                             let historicalBadge = '';
                             let recommendationBadge = '';
@@ -1478,14 +2206,9 @@ class EnhancedDashboardSystem:
                             
                             if (product.discount_percentage > 0) {
                                 discountText = product.discount_percentage.toFixed(1) + '%';
-                                
-                                if (product.discount_percentage >= 30) {
-                                    discountClass = 'discount-high';
-                                } else if (product.discount_percentage >= 10) {
-                                    discountClass = 'discount-medium';
-                                } else {
-                                    discountClass = 'discount-low';
-                                }
+                                if (product.discount_percentage >= 30) discountClass = 'discount-high';
+                                else if (product.discount_percentage >= 10) discountClass = 'discount-medium';
+                                else discountClass = 'discount-low';
                             }
                             
                             html += `
@@ -1505,36 +2228,25 @@ class EnhancedDashboardSystem:
                                 </tr>
                             `;
                         });
-                        
                         tableBody.innerHTML = html;
                     }
                     
-                    // تحديث أفضل العروض
                     function updateBestDeals(deals) {
                         const dealsContainer = document.getElementById('bestDeals');
-                        
                         if (deals.length === 0) {
                             dealsContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">لا توجد عروض تاريخية مميزة</div>';
                             return;
                         }
                         
                         let html = '';
-                        
                         deals.slice(0, 3).forEach(deal => {
                             const vsLow = deal.price_vs_low_percentage || 0;
                             let recClass = 'fair';
                             let recIcon = '👌';
                             
-                            if (vsLow <= 5) {
-                                recClass = 'excellent';
-                                recIcon = '🎯';
-                            } else if (vsLow <= 15) {
-                                recClass = 'good';
-                                recIcon = '🔥';
-                            } else if (vsLow > 30) {
-                                recClass = 'wait';
-                                recIcon = '⏳';
-                            }
+                            if (vsLow <= 5) { recClass = 'excellent'; recIcon = '🎯'; }
+                            else if (vsLow <= 15) { recClass = 'good'; recIcon = '🔥'; }
+                            else if (vsLow > 30) { recClass = 'wait'; recIcon = '⏳'; }
                             
                             html += `
                                 <div class="recommendation-box ${recClass}">
@@ -1562,11 +2274,9 @@ class EnhancedDashboardSystem:
                                 </div>
                             `;
                         });
-                        
                         dealsContainer.innerHTML = html;
                     }
                     
-                    // تحليل منتج جديد
                     async function analyzeProduct() {
                         const url = document.getElementById('productUrl').value;
                         const loading = document.getElementById('loading');
@@ -1583,7 +2293,6 @@ class EnhancedDashboardSystem:
                         try {
                             const response = await fetch(`/api/analyze-product?url=${encodeURIComponent(url)}`);
                             const data = await response.json();
-                            
                             loading.style.display = 'none';
                             
                             if (data.status === 'success') {
@@ -1603,29 +2312,19 @@ class EnhancedDashboardSystem:
                         }
                     }
                     
-                    // عرض نتيجة التحليل
                     function displayResult(data) {
                         const result = document.getElementById('result');
                         const product = data.product;
                         
                         let historicalSection = '';
-                        let recommendationSection = '';
-                        
                         if (product.has_historical_data && product.historical_low_price > 0) {
                             const vsLow = product.price_vs_low_percentage || 0;
                             let recClass = 'fair';
                             let recColor = '#ff9800';
                             
-                            if (vsLow <= 5) {
-                                recClass = 'excellent';
-                                recColor = '#4caf50';
-                            } else if (vsLow <= 15) {
-                                recClass = 'good';
-                                recColor = '#8bc34a';
-                            } else if (vsLow > 30) {
-                                recClass = 'wait';
-                                recColor = '#f44336';
-                            }
+                            if (vsLow <= 5) { recClass = 'excellent'; recColor = '#4caf50'; }
+                            else if (vsLow <= 15) { recClass = 'good'; recColor = '#8bc34a'; }
+                            else if (vsLow > 30) { recClass = 'wait'; recColor = '#f44336'; }
                             
                             historicalSection = `
                                 <div style="margin: 20px 0; padding: 15px; background: #f5f5f5; border-radius: 10px;">
@@ -1696,7 +2395,6 @@ class EnhancedDashboardSystem:
                         document.getElementById('productUrl').value = '';
                     }
                     
-                    // عرض خطأ
                     function displayError(message) {
                         const result = document.getElementById('result');
                         result.innerHTML = `
@@ -1711,32 +2409,23 @@ class EnhancedDashboardSystem:
                         result.style.display = 'block';
                     }
                     
-                    // البحث في المنتجات
                     async function searchProducts() {
                         const query = document.getElementById('searchInput').value;
-                        
                         if (!query.trim()) {
                             loadProductsTable();
                             return;
                         }
-                        
                         try {
                             const response = await fetch(`/api/search-products?q=${encodeURIComponent(query)}`);
                             const data = await response.json();
-                            
-                            if (data.status === 'success') {
-                                updateProductsTable(data.products);
-                            }
+                            if (data.status === 'success') updateProductsTable(data.products);
                         } catch (error) {
                             console.error('Search error:', error);
                         }
                     }
                     
-                    // إضافة حدث Enter للبحث
                     document.getElementById('searchInput')?.addEventListener('keypress', function(e) {
-                        if (e.key === 'Enter') {
-                            searchProducts();
-                        }
+                        if (e.key === 'Enter') searchProducts();
                     });
                 </script>
             </head>
@@ -1749,85 +2438,59 @@ class EnhancedDashboardSystem:
                     </div>
                     
                     <div class="main-content">
-                        <!-- الشريط الجانبي -->
                         <div class="sidebar">
                             <h3 style="color: #1a237e; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px;">🔍 إضافة منتج جديد</h3>
-                            
                             <div style="background: #e3f2fd; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
                                 <strong>🎯 النظام التاريخي الذكي:</strong><br>
-                                <span style="font-size: 0.9rem; color: #666;">
-                                    النظام يحلل التاريخ من CamelCamelCamel ويقدم توصيات شراء ذكية
-                                </span>
+                                <span style="font-size: 0.9rem; color: #666;">النظام يحلل التاريخ من CamelCamelCamel ويقدم توصيات شراء ذكية</span>
                             </div>
-                            
                             <div class="search-box">
-                                <input type="url" id="productUrl" class="url-input" 
-                                       placeholder="https://www.amazon.com/..." 
-                                       required>
-                                <button class="analyze-btn" onclick="analyzeProduct()">
-                                    🚀 إضافة وتحليل المنتج
-                                </button>
+                                <input type="url" id="productUrl" class="url-input" placeholder="https://www.amazon.com/..." required>
+                                <button class="analyze-btn" onclick="analyzeProduct()">🚀 إضافة وتحليل المنتج</button>
                             </div>
-                            
                             <div id="result"></div>
-                            
                             <div id="loading" class="loading">
                                 <div class="spinner"></div>
                                 <h3>جاري تحليل المنتج...</h3>
                                 <p>جاري تحليل السعر والتاريخ والتوصيات...</p>
                             </div>
-                            
                             <div style="margin-top: 30px;">
                                 <h4 style="color: #1a237e; margin-bottom: 15px;">🔍 البحث في المنتجات</h4>
-                                <input type="text" id="searchInput" class="url-input" 
-                                       placeholder="ابحث بالاسم أو ASIN أو الفئة...">
-                                <button class="analyze-btn" onclick="searchProducts()" style="background: #673ab7;">
-                                    🔎 بحث في المنتجات
-                                </button>
+                                <input type="text" id="searchInput" class="url-input" placeholder="ابحث بالاسم أو ASIN أو الفئة...">
+                                <button class="analyze-btn" onclick="searchProducts()" style="background: #673ab7;">🔎 بحث في المنتجات</button>
                             </div>
-                            
                             <div style="margin-top: 30px; padding: 20px; background: #f5f5f5; border-radius: 10px;">
                                 <h4 style="color: #1a237e; margin-bottom: 15px;">🎯 أفضل العروض التاريخية</h4>
-                                <div id="bestDeals">
-                                    <!-- سيتم ملؤه بالبيانات -->
-                                </div>
+                                <div id="bestDeals"></div>
                             </div>
                         </div>
                         
-                        <!-- اللوحة الرئيسية -->
                         <div class="main-panel">
-                            <!-- لوحة النظام التاريخي -->
                             <div class="historical-panel">
                                 <div style="display: flex; justify-content: space-between; align-items: center;">
                                     <div>
                                         <h2 style="margin: 0;">🎯 النظام التاريخي الذكي</h2>
-                                        <p style="margin: 5px 0 0 0; opacity: 0.9;">
-                                            محلل تاريخي لمقارنة الأسعار وتقديم توصيات شراء ذكية
-                                        </p>
+                                        <p style="margin: 5px 0 0 0; opacity: 0.9;">محلل تاريخي لمقارنة الأسعار وتقديم توصيات شراء ذكية</p>
                                     </div>
                                 </div>
                             </div>
                             
-                            <!-- إحصائيات النظام التاريخي -->
                             <div class="stats-grid">
                                 <div class="stat-card historical">
                                     <div class="stat-label">المنتجات مع تاريخ</div>
                                     <div class="stat-value" id="historicalProducts">0</div>
                                     <div style="font-size: 0.8rem; color: #666;">بيانات تاريخية متوفرة</div>
                                 </div>
-                                
                                 <div class="stat-card recommendations">
                                     <div class="stat-label">عروض ممتازة</div>
                                     <div class="stat-value" id="excellentDeals">0</div>
                                     <div style="font-size: 0.8rem; color: #666;">لقطات العمر</div>
                                 </div>
-                                
                                 <div class="stat-card drops">
                                     <div class="stat-label">عروض جيدة</div>
                                     <div class="stat-value" id="goodDeals">0</div>
                                     <div style="font-size: 0.8rem; color: #666;">صفقات رائعة</div>
                                 </div>
-                                
                                 <div class="stat-card proxy">
                                     <div class="stat-label">متوسط التوفير</div>
                                     <div class="stat-value" id="avgSavings">$0</div>
@@ -1835,26 +2498,22 @@ class EnhancedDashboardSystem:
                                 </div>
                             </div>
                             
-                            <!-- إحصائيات النظام الأساسية -->
                             <div class="stats-grid">
                                 <div class="stat-card">
                                     <div class="stat-label">إجمالي المنتجات</div>
                                     <div class="stat-value" id="totalProducts">0</div>
                                     <div style="font-size: 0.8rem; color: #666;">منتجات في النظام</div>
                                 </div>
-                                
                                 <div class="stat-card">
                                     <div class="stat-label">المنتجات النشطة</div>
                                     <div class="stat-value" id="activeProducts">0</div>
                                     <div style="font-size: 0.8rem; color: #666;">متاحة للشراء</div>
                                 </div>
-                                
                                 <div class="stat-card">
                                     <div class="stat-label">المتوسط السعري</div>
                                     <div class="stat-value" id="avgPrice">$0</div>
                                     <div style="font-size: 0.8rem; color: #666;">متوسط الأسعار</div>
                                 </div>
-                                
                                 <div class="stat-card">
                                     <div class="stat-label">متوسط الخصم</div>
                                     <div class="stat-value" id="avgDiscount">0%</div>
@@ -1862,13 +2521,9 @@ class EnhancedDashboardSystem:
                                 </div>
                             </div>
                             
-                            <!-- جدول المنتجات -->
                             <div style="margin: 30px 0 20px 0;">
-                                <h3 style="color: #1a237e; border-bottom: 2px solid #eee; padding-bottom: 10px;">
-                                    📋 جميع المنتجات مع التحليل التاريخي
-                                </h3>
+                                <h3 style="color: #1a237e; border-bottom: 2px solid #eee; padding-bottom: 10px;">📋 جميع المنتجات مع التحليل التاريخي</h3>
                             </div>
-                            
                             <div class="products-table-container">
                                 <table class="products-table">
                                     <thead>
@@ -1884,14 +2539,11 @@ class EnhancedDashboardSystem:
                                             <th>آخر تحديث</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="productsTableBody">
-                                        <!-- سيتم ملؤه بالبيانات -->
-                                    </tbody>
+                                    <tbody id="productsTableBody"></tbody>
                                 </table>
                             </div>
                         </div>
                     </div>
-                    
                     <div class="footer">
                         <p>© 2024 نظام التحليل التاريخي الذكي - الإصدار 22.0</p>
                         <p>🎯 مستشار الشراء الذكي | 📈 تحليل تاريخي من CamelCamelCamel | 🔑 مفتاح عبور API</p>
@@ -1903,50 +2555,24 @@ class EnhancedDashboardSystem:
         
         @app.route('/api/dashboard-stats', methods=['GET'])
         def get_dashboard_stats():
-            """الحصول على إحصائيات لوحة التحكم"""
             try:
-                # الحصول على إحصائيات أساسية
-                conn = system.dashboard_db.get_connection()
-                cursor = conn.cursor()
-                
-                cursor.execute('''
-                    SELECT 
-                        COUNT(*) as total,
-                        COUNT(CASE WHEN availability_status = 'active' THEN 1 END) as active,
-                        AVG(current_price) as avg_price,
-                        AVG(discount_percentage) as avg_discount
-                    FROM dashboard_products
-                    WHERE current_price > 0
-                ''')
-                
-                row = cursor.fetchone()
-                
-                stats = {
-                    'total_products': row[0] if row else 0,
-                    'active_products': row[1] if row else 0,
-                    'avg_price': round(row[2], 2) if row and row[2] else 0.0,
-                    'avg_discount': round(row[3], 2) if row and row[3] else 0.0,
-                }
-                
+                stats = self.dashboard_db.get_display_stats()
                 return jsonify({'status': 'success', 'stats': stats})
             except Exception as e:
                 return jsonify({'status': 'error', 'error': str(e)}), 500
         
         @app.route('/api/historical-stats', methods=['GET'])
         def get_historical_stats():
-            """الحصول على إحصائيات النظام التاريخي"""
             try:
-                conn = system.dashboard_db.get_connection()
+                conn = self.dashboard_db.get_connection()
                 cursor = conn.cursor()
                 
-                # عدد المنتجات مع بيانات تاريخية
                 cursor.execute('''
                     SELECT COUNT(*) FROM dashboard_products 
                     WHERE historical_data_available = 1 AND historical_low_price > 0
                 ''')
                 historical_products = cursor.fetchone()[0] or 0
                 
-                # عدد التوصيات الممتازة
                 cursor.execute('''
                     SELECT COUNT(*) FROM dashboard_products 
                     WHERE purchase_recommendation LIKE '%لقطة العمر%' 
@@ -1954,7 +2580,6 @@ class EnhancedDashboardSystem:
                 ''')
                 excellent_deals = cursor.fetchone()[0] or 0
                 
-                # عدد التوصيات الجيدة
                 cursor.execute('''
                     SELECT COUNT(*) FROM dashboard_products 
                     WHERE purchase_recommendation LIKE '%صفقة رائعة%' 
@@ -1962,7 +2587,6 @@ class EnhancedDashboardSystem:
                 ''')
                 good_deals = cursor.fetchone()[0] or 0
                 
-                # متوسط التوفير مقارنة بأقل سعر تاريخي
                 cursor.execute('''
                     SELECT AVG(current_price - historical_low_price) 
                     FROM dashboard_products 
@@ -1986,67 +2610,17 @@ class EnhancedDashboardSystem:
         
         @app.route('/api/dashboard-products', methods=['GET'])
         def get_dashboard_products():
-            """الحصول على المنتجات للعرض"""
             try:
                 limit = request.args.get('limit', 50, type=int)
                 offset = request.args.get('offset', 0, type=int)
-                
-                conn = system.dashboard_db.get_connection()
-                cursor = conn.cursor()
-                
-                cursor.execute('''
-                    SELECT asin, product_name, current_price, reference_price, discount_percentage,
-                           currency, availability_status, last_updated, source_url, category,
-                           price_change_count, initial_price, monitoring_enabled, price_drop_detected,
-                           extraction_method, last_extraction_status, historical_low_price,
-                           price_average, last_history_sync, historical_data_available,
-                           purchase_recommendation, recommendation_confidence
-                    FROM dashboard_products
-                    ORDER BY last_updated DESC
-                    LIMIT ? OFFSET ?
-                ''', (limit, offset))
-                
-                products = []
-                for row in cursor.fetchall():
-                    products.append({
-                        'asin': row[0],
-                        'product_name': row[1] or f"منتج {row[0]}",
-                        'current_price': row[2],
-                        'reference_price': row[3],
-                        'discount_percentage': row[4],
-                        'currency': row[5],
-                        'availability_status': row[6],
-                        'last_updated': row[7],
-                        'source_url': row[8],
-                        'category': row[9] or 'غير مصنف',
-                        'price_change_count': row[10] or 0,
-                        'initial_price': row[11],
-                        'monitoring_enabled': bool(row[12]) if row[12] is not None else True,
-                        'price_drop_detected': bool(row[13]) if row[13] is not None else False,
-                        'extraction_method': row[14] or 'direct',
-                        'last_extraction_status': row[15] or 'success',
-                        'historical_low_price': row[16] or 0.0,
-                        'price_average': row[17] or 0.0,
-                        'last_history_sync': row[18],
-                        'historical_data_available': bool(row[19]) if row[19] is not None else False,
-                        'purchase_recommendation': row[20],
-                        'recommendation_confidence': row[21] or 0.0,
-                        'has_discount': row[3] and row[3] > row[2] and row[2] > 0
-                    })
-                
-                return jsonify({
-                    'status': 'success',
-                    'products': products,
-                    'timestamp': datetime.now().isoformat()
-                })
+                products = self.dashboard_db.get_all_products(limit=limit, offset=offset)
+                return jsonify({'status': 'success', 'products': products, 'timestamp': datetime.now().isoformat()})
             except Exception as e:
                 return jsonify({'status': 'error', 'error': str(e)}), 500
         
         @app.route('/api/analyze-product', methods=['GET'])
         def analyze_product():
-            """🔥 تحليل منتج جديد مع النظام التاريخي"""
             url = request.args.get('url')
-            
             if not url:
                 return jsonify({'status': 'error', 'error': 'رابط المنتج مطلوب'}), 400
             
@@ -2056,18 +2630,11 @@ class EnhancedDashboardSystem:
             logger.info(f"🎯 بدء تحليل منتج جديد مع النظام التاريخي: {url[:80]}...")
             
             try:
-                # استخدام المكامل المحسن مع النظام التاريخي
-                product_data, message, extraction_method = system.integrator.sync_product_with_historical_analysis(url)
-                
+                product_data, message, extraction_method = self.integrator.sync_product_with_historical_analysis(url)
                 if not product_data:
                     return jsonify({'status': 'error', 'error': message}), 400
                 
-                response = {
-                    'status': 'success',
-                    'product': product_data,
-                    'message': message
-                }
-                
+                response = {'status': 'success', 'product': product_data, 'message': message}
                 logger.info(f"✅ تمت إضافة المنتج {product_data['asin']} مع النظام التاريخي")
                 return jsonify(response)
                 
@@ -2077,69 +2644,19 @@ class EnhancedDashboardSystem:
         
         @app.route('/api/search-products', methods=['GET'])
         def search_products():
-            """البحث في المنتجات"""
             query = request.args.get('q', '')
-            
             try:
-                conn = system.dashboard_db.get_connection()
-                cursor = conn.cursor()
-                
-                if not query.strip():
-                    cursor.execute('''
-                        SELECT asin, product_name, current_price, reference_price, discount_percentage,
-                               currency, availability_status, last_updated, category, extraction_method,
-                               historical_low_price, purchase_recommendation
-                        FROM dashboard_products
-                        ORDER BY last_updated DESC
-                        LIMIT 50
-                    ''')
-                else:
-                    search_term = f"%{query}%"
-                    cursor.execute('''
-                        SELECT asin, product_name, current_price, reference_price, discount_percentage,
-                               currency, availability_status, last_updated, category, extraction_method,
-                               historical_low_price, purchase_recommendation
-                        FROM dashboard_products
-                        WHERE asin LIKE ? OR product_name LIKE ? OR category LIKE ?
-                        ORDER BY last_updated DESC
-                        LIMIT 50
-                    ''', (search_term, search_term, search_term))
-                
-                products = []
-                for row in cursor.fetchall():
-                    products.append({
-                        'asin': row[0],
-                        'product_name': row[1] or f"منتج {row[0]}",
-                        'current_price': row[2],
-                        'reference_price': row[3],
-                        'discount_percentage': row[4],
-                        'currency': row[5],
-                        'availability_status': row[6],
-                        'last_updated': row[7],
-                        'category': row[8] or 'غير مصنف',
-                        'extraction_method': row[9] or 'direct',
-                        'historical_low_price': row[10] or 0.0,
-                        'purchase_recommendation': row[11],
-                        'has_discount': row[3] and row[3] > row[2] and row[2] > 0
-                    })
-                
-                return jsonify({
-                    'status': 'success',
-                    'products': products,
-                    'query': query,
-                    'count': len(products)
-                })
+                products = self.dashboard_db.search_products(query, limit=50)
+                return jsonify({'status': 'success', 'products': products, 'query': query, 'count': len(products)})
             except Exception as e:
                 return jsonify({'status': 'error', 'error': str(e)}), 500
         
         @app.route('/api/best-historical-deals', methods=['GET'])
         def get_best_historical_deals():
-            """🔥 الحصول على أفضل العروض بناءً على التحليل التاريخي"""
             try:
-                conn = system.dashboard_db.get_connection()
+                conn = self.dashboard_db.get_connection()
                 cursor = conn.cursor()
                 
-                # جلب المنتجات مع بيانات تاريخية وتوصيات
                 cursor.execute('''
                     SELECT asin, product_name, current_price, historical_low_price,
                            price_average, purchase_recommendation, recommendation_confidence
@@ -2160,7 +2677,6 @@ class EnhancedDashboardSystem:
                     if historical_low > 0 and current_price > 0:
                         price_vs_low = ((current_price - historical_low) / historical_low * 100)
                         
-                        # تحديد نوع التوصية
                         recommendation_type = 'fair'
                         if price_vs_low <= 5:
                             recommendation_type = 'excellent'
@@ -2182,53 +2698,43 @@ class EnhancedDashboardSystem:
                             'savings': current_price - historical_low
                         })
                 
-                return jsonify({
-                    'status': 'success',
-                    'deals': deals,
-                    'count': len(deals)
-                })
+                return jsonify({'status': 'success', 'deals': deals, 'count': len(deals)})
             except Exception as e:
                 return jsonify({'status': 'error', 'error': str(e)}), 500
         
         @app.route('/api/update-historical', methods=['POST'])
         def update_historical():
-            """🔥 تحديث البيانات التاريخية لمنتج معين"""
-            data = request.json
-            asin = data.get('asin')
-            
-            if not asin:
-                return jsonify({'status': 'error', 'error': 'ASIN مطلوب'}), 400
-            
             try:
-                # جلب البيانات التاريخية
-                historical_data = system.historical_analyzer.fetch_historical_data(asin)
+                data = request.get_json()
+                if not data:
+                    return jsonify({'status': 'error', 'error': 'بيانات JSON مطلوبة'}), 400
                 
+                asin = data.get('asin')
+                if not asin:
+                    return jsonify({'status': 'error', 'error': 'ASIN مطلوب'}), 400
+                
+                historical_data = self.historical_analyzer.fetch_historical_data(asin)
                 if historical_data:
-                    # تحديث قاعدة البيانات
-                    system.dashboard_db.update_historical_data(asin, historical_data)
+                    self.dashboard_db.update_historical_data(asin, historical_data)
                     
-                    # جلب السعر الحالي
-                    conn = system.dashboard_db.get_connection()
+                    conn = self.dashboard_db.get_connection()
                     cursor = conn.cursor()
                     cursor.execute('SELECT current_price FROM dashboard_products WHERE asin = ?', (asin,))
                     row = cursor.fetchone()
                     
                     if row and row[0]:
                         current_price = row[0]
-                        # توليد توصية جديدة
-                        recommendation = system.historical_analyzer.generate_purchase_recommendation(
+                        recommendation = self.historical_analyzer.generate_purchase_recommendation(
                             current_price=current_price,
                             historical_low=historical_data['historical_low_price'],
                             price_average=historical_data['price_average']
                         )
                         
-                        # تحديث التوصية
                         cursor.execute('''
                             UPDATE dashboard_products 
                             SET purchase_recommendation = ?, recommendation_confidence = ?
                             WHERE asin = ?
                         ''', (recommendation['recommendation_text'], recommendation['confidence_score'], asin))
-                        
                         conn.commit()
                     
                     return jsonify({
@@ -2244,7 +2750,6 @@ class EnhancedDashboardSystem:
         
         @app.route('/system-status')
         def system_status():
-            """🔥 صفحة حالة النظام مع النظام التاريخي"""
             return jsonify({
                 'status': 'active',
                 'version': '22.0',
@@ -2264,7 +2769,6 @@ class EnhancedDashboardSystem:
         
         @app.route('/ping')
         def ping():
-            """صفحة البقاء حياً"""
             return jsonify({
                 'status': 'alive',
                 'timestamp': datetime.now().isoformat(),
@@ -2274,7 +2778,6 @@ class EnhancedDashboardSystem:
 
 # ==================== تشغيل النظام ====================
 def main():
-    """الدالة الرئيسية"""
     print("\n" + "="*70)
     print("🚀 بدء تشغيل النظام التاريخي الذكي")
     print("="*70)
