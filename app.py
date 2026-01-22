@@ -467,10 +467,10 @@ class EnhancedDatabase:
             self._update_display_stats()
             
         except Exception as e:
-            print(f"❌ خطأ في قاعدة البيانات: {e}")
-            if conn:
-                conn.rollback()
-            raise
+        print(f"❌ خطأ في قاعدة البيانات: {e}")
+        if conn:
+            conn.rollback()
+        raise
     
     def _add_missing_columns(self, cursor):
         """إضافة الأعمدة المفقودة إلى الجداول"""
