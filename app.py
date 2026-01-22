@@ -1,4 +1,27 @@
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple, Any, List
+from datetime import datetime
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+import re
+import json
+import logging
+from urllib.parse import quote
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
+# Configuration (adjust as needed)
+HISTORICAL_ANALYSIS_CONFIG = {
+    'enabled': True,
+    'camel_endpoint': 'https://camelcamelcamel.com',
+    'use_scraperapi_for_history': True
+}
+
+PROXY_CONFIG = {
+    'scraperapi_key': '',  # Add your key here
+    'scraperapi_url': 'http://api.scraperapi.com'
+}
 
 # ==================== نظام التحليل التاريخي الذكي - الإصلاح الكامل ====================
 class HistoricalPriceAnalyzer:
@@ -411,3 +434,28 @@ class HistoricalPriceAnalyzer:
                 'recommendation_text': 'خطأ في التحليل',
                 'price_vs_low_percentage': 0.0
             }
+
+
+# Example usage
+if __name__ == "__main__":
+    analyzer = HistoricalPriceAnalyzer()
+    
+    # Test with sample ASIN
+    asin = "B08N5WRWNW"  # Example ASIN
+    result = analyzer.fetch_historical_data(asin)
+    
+    if result:
+        print(f"📊 Results for {asin}:")
+        print(f"Historical Low: ${result['historical_low_price']:.2f}")
+        print(f"Price Average: ${result['price_average']:.2f}")
+        print(f"Data Source: {result['data_source']}")
+        
+        # Generate recommendation
+        current_price = 99.99  # Example current price
+        recommendation = analyzer.generate_purchase_recommendation(
+            current_price, 
+            result['historical_low_price'], 
+            result['price_average']
+        )
+        print(f"\n🎯 Recommendation: {recommendation['recommendation_text']}")
+        print(f"Confidence: {recommendation['confidence_score']}%")
