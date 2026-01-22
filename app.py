@@ -390,7 +390,7 @@ class EnhancedDatabase:
                 )
             ''')
             
-            # ============ جدول سجلات المراقبة ============
+            # ============ جدول سجلال مراقبة ============
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS monitoring_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -467,10 +467,10 @@ class EnhancedDatabase:
             self._update_display_stats()
             
         except Exception as e:
-        print(f"❌ خطأ في قاعدة البيانات: {e}")
-        if conn:
-            conn.rollback()
-        raise
+            print(f"❌ خطأ في قاعدة البيانات: {e}")
+            if conn:
+                conn.rollback()
+            raise
     
     def _add_missing_columns(self, cursor):
         """إضافة الأعمدة المفقودة إلى الجداول"""
@@ -3002,4 +3002,4 @@ def main():
         print("\n✅ تم إغلاق النظام بشكل آمن")
 
 if __name__ == '__main__':
-    main()ط
+    main()
