@@ -850,12 +850,25 @@ class SmartExtractionEngine:
             region_config = REGION_CONFIGS[region_code]
             url = f"https://{region_config['domain']}/dp/{asin}"
             
+            # Try direct extraction first
             headers = self._get_headers()
             response = self.session.get(url, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 product_data = self._parse_html(response.text, asin, region_code, region_config)
-                return product_data
+                if product_data:
+                    return product_data
+            
+            # Try ScraperAPI if direct extraction failed
+            if SCRAPERAPI_CONFIG['enabled']:
+                api_url = f"{SCRAPERAPI_CONFIG['url']}/?api_key={SCRAPERAPI_CONFIG['api_key']}&url={quote(url)}&render=true"
+                response = self.session.get(api_url, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    product_data = self._parse_html(response.text, asin, region_code, region_config)
+                    if product_data:
+                        return product_data
+                        
         except Exception as e:
             logger.debug(f"Extraction failed for {asin} in {region_code}: {e}")
         return None
@@ -888,7 +901,7 @@ class SmartExtractionEngine:
     def _parse_html(self, html: str, asin: str, region: str, region_config: Dict) -> Optional[Dict]:
         """Parse HTML and extract product data"""
         try:
-            # Extract price
+            # Improved price extraction patterns
             current_price = self._extract_price(html, region_config)
             if not current_price or current_price <= 0:
                 return None
@@ -921,22 +934,41 @@ class SmartExtractionEngine:
             return None
     
     def _extract_price(self, html: str, region_config: Dict) -> Optional[float]:
-        """Extract price from HTML"""
+        """Extract price from HTML with improved patterns"""
         patterns = [
-            r'"priceCurrency":"[A-Z]{3}".*?"price":"([\d.]+)"',
+            # JSON-LD pattern
+            r'"priceCurrency":"[A-Z]{3}".*?"price":"([\d\.,]+)"',
+            # Whole price pattern
             r'<span[^>]*class="a-price-whole"[^>]*>([\d,]+)</span>',
-            r'<span[^>]*class="a-offscreen"[^>]*>.*?([\d,]+\.?\d*)',
-            r'>\s*' + re.escape(region_config['currency_symbol']) + r'\s*([\d,]+\.?\d*)'
+            # Offscreen pattern
+            r'<span[^>]*class="a-offscreen"[^>]*>.*?([\d\.,]+)',
+            # Price block pattern
+            r'<span[^>]*class="a-price"[^>]*>.*?<span[^>]*class="a-offscreen"[^>]*>.*?([\d\.,]+)',
+            # Currency symbol pattern
+            r'>\s*' + re.escape(region_config['currency_symbol']) + r'\s*([\d\.,]+)',
+            # Data attribute pattern
+            r'data-a-price="([\d\.,]+)"',
+            # Price in JSON
+            r'"displayPrice":"([\d\.,]+)"'
         ]
         
         for pattern in patterns:
             matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
             for match in matches:
                 try:
-                    price = float(match.replace(',', ''))
+                    # Clean the price string
+                    price_str = match.replace(',', '').replace('.', '')
+                    if ',' in match and '.' in match:
+                        # Handle European format (1.234,56)
+                        price_str = match.replace('.', '').replace(',', '.')
+                    elif ',' in match:
+                        # Handle US format (1,234.56)
+                        price_str = match.replace(',', '')
+                    
+                    price = float(price_str)
                     if 0.1 <= price <= 1000000:
                         return price
-                except:
+                except ValueError:
                     continue
         return None
     
@@ -945,7 +977,9 @@ class SmartExtractionEngine:
         patterns = [
             r'<span[^>]*class="a-price a-text-price"[^>]*>.*?<span[^>]*class="a-offscreen"[^>]*>(.*?)</span>',
             r'<span[^>]*class="a-text-strike"[^>]*>(.*?)</span>',
-            r'List Price:.*?' + re.escape(region_config['currency_symbol']) + r'\s*([\d,]+\.?\d*)'
+            r'List Price:.*?' + re.escape(region_config['currency_symbol']) + r'\s*([\d\.,]+)',
+            r'Was:.*?' + re.escape(region_config['currency_symbol']) + r'\s*([\d\.,]+)',
+            r'RRP:.*?' + re.escape(region_config['currency_symbol']) + r'\s*([\d\.,]+)'
         ]
         
         for pattern in patterns:
@@ -953,7 +987,14 @@ class SmartExtractionEngine:
             if match:
                 try:
                     price_text = match.group(1)
-                    price = float(re.sub(r'[^\d.]', '', price_text))
+                    # Clean price text
+                    price_text = price_text.replace(',', '').replace('.', '')
+                    if ',' in price_text and '.' in price_text:
+                        price_text = price_text.replace('.', '').replace(',', '.')
+                    elif ',' in price_text:
+                        price_text = price_text.replace(',', '')
+                    
+                    price = float(price_text)
                     if 0.1 <= price <= 1000000:
                         return price
                 except:
@@ -965,7 +1006,8 @@ class SmartExtractionEngine:
         patterns = [
             r'<span[^>]*id="productTitle"[^>]*>(.*?)</span>',
             r'<h1[^>]*id="title"[^>]*>(.*?)</h1>',
-            r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"'
+            r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"',
+            r'<title[^>]*>(.*?)</title>'
         ]
         
         for pattern in patterns:
@@ -1339,9 +1381,12 @@ class CrossRegionComparator:
                         'availability': product_data.get('availability_status', 'unknown'),
                         'extraction_time': datetime.now().isoformat()
                     }
+                else:
+                    logger.debug(f"❌ Failed to extract price for {asin} in {region_code}")
+                    return None
             except Exception as e:
-                logger.debug(f"❌ Failed to extract price for {region_code}: {e}")
-            return None
+                logger.debug(f"❌ Error extracting price for {region_code}: {e}")
+                return None
         
         # استخراج متزامن لجميع المناطق
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.config['parallel_workers']) as executor:
@@ -1354,7 +1399,11 @@ class CrossRegionComparator:
                 result = future.result()
                 if result:
                     region_prices.append(result)
+                else:
+                    region_code = futures[future]
+                    logger.debug(f"❌ No price data for {asin} in {region_code}")
         
+        logger.info(f"📊 Extracted prices from {len(region_prices)} regions for {asin}")
         return region_prices
     
     def _analyze_cached_prices(self, asin: str, cached_prices: List[Dict], target_region: str = None) -> Dict:
@@ -1406,10 +1455,13 @@ class CrossRegionComparator:
             local_price = region_data['local_price']
             local_currency = region_data['local_currency']
             
-            if local_currency in EXCHANGE_RATES:
-                converted_price = local_price * EXCHANGE_RATES[local_currency]
-            else:
-                converted_price = local_price  # إذا لم نعرف سعر الصرف
+            # الحصول على سعر الصرف
+            exchange_rate = EXCHANGE_RATES.get(local_currency)
+            if not exchange_rate:
+                logger.warning(f"⚠️ No exchange rate for {local_currency}, using 1.0")
+                exchange_rate = 1.0
+            
+            converted_price = local_price * exchange_rate
             
             # إضافة التكاليف الإضافية
             region_costs = REGIONAL_COSTS.get(region_data['region_code'], {})
@@ -1417,14 +1469,15 @@ class CrossRegionComparator:
             tax_rate = region_costs.get('tax', 0.0) if self.config['include_taxes'] else 0.0
             import_duty = region_costs.get('import_duty', 0.0)
             
-            # حساب التكلفة الإجمالية
+            # حساب التكلفة الإجمالية - إصلاح الخطأ هنا
             tax_amount = (converted_price * tax_rate) / 100
             duty_amount = (converted_price * import_duty) / 100
             
             total_cost = converted_price + shipping_cost + tax_amount + duty_amount
             
             # حساب "درجة الصفقة" (كلما قل السعر، زادت الدرجة)
-            base_score = 100 - (total_cost / 100)  # معادلة مبسطة
+            base_score = 100 - (total_cost / 100) if total_cost > 0 else 0
+            
             # زيادة الدرجة للمناطق الأقرب (تخفيض تكاليف الشحن)
             if region_data['region_code'] in ['SA', 'AE']:
                 base_score += 10  # زيادة للأولوية الإقليمية
@@ -1487,10 +1540,8 @@ class CrossRegionComparator:
                 local_currency = region_data['local_currency']
                 local_price = region_data['local_price']
                 
-                if local_currency in EXCHANGE_RATES:
-                    converted_price = local_price * EXCHANGE_RATES[local_currency]
-                else:
-                    converted_price = local_price
+                exchange_rate = EXCHANGE_RATES.get(local_currency, 1.0)
+                converted_price = local_price * exchange_rate
                 
                 region_costs = REGIONAL_COSTS.get(region_data['region_code'], {})
                 shipping_cost = region_costs.get('shipping', 0.0) if self.config['include_shipping'] else 0.0
@@ -1500,6 +1551,9 @@ class CrossRegionComparator:
                 tax_amount = (converted_price * tax_rate) / 100
                 duty_amount = (converted_price * import_duty) / 100
                 total_cost = converted_price + shipping_cost + tax_amount + duty_amount
+                
+                # حساب درجة الصفقة
+                deal_score = region_data.get('deal_score', 0.0)
                 
                 save_data = {
                     'region_code': region_data['region_code'],
@@ -1512,7 +1566,7 @@ class CrossRegionComparator:
                     'total_cost': round(total_cost, 2),
                     'availability_status': region_data.get('availability', 'unknown'),
                     'product_url': region_data.get('product_url'),
-                    'best_deal_score': region_data.get('deal_score', 0.0)
+                    'best_deal_score': deal_score
                 }
                 
                 self.db.save_cross_region_price(asin, save_data)
@@ -1539,16 +1593,17 @@ class CrossRegionComparator:
         
         if savings > 20:
             # توفير كبير - صفقة ممتازة
+            savings_amount = worst_deal['total_cost_usd'] - best_deal['total_cost_usd'] if worst_deal else 0
             return {
                 'type': 'HOT_DEAL',
                 'emoji': '🔥',
                 'color': '#FF5722',
                 'title': '🔥 صفقة ساخنة في منطقة أخرى!',
                 'message': f'توفير يصل إلى {savings:.1f}% مقارنة بأغلى منطقة',
-                'details': f'اشتري من {best_deal["region_name"]} {best_deal["region_flag"]} ووفر ${(worst_deal["total_cost_usd"] - best_deal["total_cost_usd"]):.2f}',
+                'details': f'اشتري من {best_deal["region_name"]} {best_deal["region_flag"]} ووفر ${savings_amount:.2f}',
                 'action': 'buy_from_region',
                 'recommended_region': best_deal['region_code'],
-                'savings_amount': worst_deal['total_cost_usd'] - best_deal['total_cost_usd'],
+                'savings_amount': savings_amount,
                 'savings_percentage': savings,
                 'priority': 3
             }
