@@ -1,11 +1,12 @@
 """
 ultimate_amazon_price_tracker_pro.py - نظام تتبع أسعار Amazon الاحترافي - جاهز للإنتاج
-الإصدار: 24.0 ULTIMATE EDITION + SMART RECOMMENDATIONS
+الإصدار: 24.0 ULTIMATE EDITION + SMART RECOMMENDATIONS + CROSS-REGION COMPARISON
 
 ميزات فريدة لم تُرى من قبل:
 ✅ AI-Powered Price Prediction
 ✅ Multi-Region Support (الشرق الأوسط، أمريكا، أوروبا)
 ✅ Smart Buy/Wait/Don't Buy Recommendations 🆕
+✅ Cross-Region Price Comparison 🔥
 ✅ Telegram Bot Integration
 ✅ Push Notifications + Email + SMS
 ✅ Advanced Analytics Dashboard
@@ -32,6 +33,7 @@ import uuid
 import platform
 import requests
 import threading
+import concurrent.futures
 from threading import Lock, RLock, Thread, Event, Timer
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs, urlencode, urljoin, quote
@@ -48,7 +50,7 @@ import logging
 
 # ==================== CONFIGURATION ====================
 
-VERSION = "24.0 ULTIMATE + SMART RECOMMENDATIONS"
+VERSION = "24.0 ULTIMATE + SMART RECOMMENDATIONS + CROSS-REGION"
 BUILD_DATE = datetime.now().strftime("%Y-%m-%d")
 
 # Multi-Region Configuration
@@ -91,6 +93,24 @@ REGION_CONFIGS = {
 }
 
 DEFAULT_REGION = 'US'
+
+# Exchange Rates (يمكن تحديثها من API)
+EXCHANGE_RATES = {
+    'USD': 1.0,
+    'GBP': 1.27,      # 1 GBP = 1.27 USD
+    'EUR': 1.09,      # 1 EUR = 1.09 USD
+    'SAR': 0.2667,    # 1 SAR = 0.2667 USD
+    'AED': 0.2723     # 1 AED = 0.2723 USD
+}
+
+# Regional Costs (الشحن والضرائب التقريبية)
+REGIONAL_COSTS = {
+    'US': {'shipping': 0.0, 'tax': 0.0, 'import_duty': 0.0},
+    'UK': {'shipping': 15.0, 'tax': 20.0, 'import_duty': 0.0},
+    'DE': {'shipping': 12.0, 'tax': 19.0, 'import_duty': 0.0},
+    'SA': {'shipping': 0.0, 'tax': 15.0, 'import_duty': 5.0},
+    'AE': {'shipping': 10.0, 'tax': 5.0, 'import_duty': 5.0}
+}
 
 # API Configuration
 SCRAPERAPI_CONFIG = {
@@ -151,6 +171,16 @@ RECOMMENDATION_CONFIG = {
     }
 }
 
+# Cross-Region Comparison Configuration
+COMPARISON_CONFIG = {
+    'enabled': True,
+    'cache_duration_minutes': 5,
+    'parallel_workers': 5,
+    'include_shipping': True,
+    'include_taxes': True,
+    'max_regions_to_compare': 5
+}
+
 # Analytics Configuration
 ANALYTICS_CONFIG = {
     'enabled': True,
@@ -189,6 +219,7 @@ print("\n🎯 PREMIUM FEATURES INITIALIZED:")
 print("  ✅ Multi-Region Support (US, UK, DE, SA, AE)")
 print("  ✅ AI-Powered Price Prediction")
 print("  ✅ Smart Buy/Wait/Don't Buy Recommendations 🆕")
+print("  ✅ 🔥 Cross-Region Price Comparison (NEW)")
 print("  ✅ Advanced Analytics Dashboard")
 print("  ✅ Real-time Notifications (Email, Telegram, Push)")
 print("  ✅ Smart Extraction System (3-Layer Fallback)")
@@ -200,7 +231,7 @@ print("=" * 80)
 # ==================== ENHANCED DATABASE ====================
 
 class UltimateDatabaseManager:
-    """Enterprise-Grade Database Manager with Recommendations Support"""
+    """Enterprise-Grade Database Manager with Recommendations & Comparison Support"""
     
     def __init__(self, db_path: str = "ultimate_tracker.db"):
         self.db_path = db_path
@@ -322,6 +353,29 @@ class UltimateDatabaseManager:
             )
         ''')
         
+        # 🔥 ============ Cross-Region Prices Table ============
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cross_region_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asin TEXT NOT NULL,
+                region_code TEXT NOT NULL,
+                local_price REAL NOT NULL,
+                local_currency TEXT,
+                converted_price REAL,
+                converted_currency TEXT DEFAULT 'USD',
+                shipping_cost REAL DEFAULT 0.0,
+                tax_percentage REAL DEFAULT 0.0,
+                import_duty_percentage REAL DEFAULT 0.0,
+                total_cost REAL,
+                availability_status TEXT DEFAULT 'unknown',
+                product_url TEXT,
+                last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                confidence_score REAL DEFAULT 0.0,
+                best_deal_score REAL DEFAULT 0.0,
+                UNIQUE(asin, region_code)
+            )
+        ''')
+        
         # ============ User Watchlist Table ============
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS watchlist (
@@ -368,7 +422,10 @@ class UltimateDatabaseManager:
             'CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id, asin)',
             'CREATE INDEX IF NOT EXISTS idx_predictions_asin ON price_predictions(asin, prediction_date DESC)',
             'CREATE INDEX IF NOT EXISTS idx_analytics_metric ON analytics(metric_name, recorded_at DESC)',
-            'CREATE INDEX IF NOT EXISTS idx_recommendations_asin ON price_recommendations(asin, created_at DESC)'
+            'CREATE INDEX IF NOT EXISTS idx_recommendations_asin ON price_recommendations(asin, created_at DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_cross_region_asin ON cross_region_prices(asin, region_code)',
+            'CREATE INDEX IF NOT EXISTS idx_cross_region_score ON cross_region_prices(asin, best_deal_score DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_cross_region_time ON cross_region_prices(asin, last_checked DESC)'
         ]
         
         for index_sql in indexes:
@@ -564,6 +621,139 @@ class UltimateDatabaseManager:
             logger.error(f"❌ Error getting recommendation: {e}")
             return None
     
+    # 🔥 Cross-Region Comparison Methods
+    
+    def save_cross_region_price(self, asin: str, region_data: Dict) -> bool:
+        """Save cross-region price data"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO cross_region_prices 
+                (asin, region_code, local_price, local_currency, converted_price,
+                 shipping_cost, tax_percentage, import_duty_percentage, total_cost,
+                 availability_status, product_url, last_checked, best_deal_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ''', (
+                asin,
+                region_data['region_code'],
+                region_data['local_price'],
+                region_data['local_currency'],
+                region_data.get('converted_price', 0.0),
+                region_data.get('shipping_cost', 0.0),
+                region_data.get('tax_percentage', 0.0),
+                region_data.get('import_duty_percentage', 0.0),
+                region_data.get('total_cost', 0.0),
+                region_data.get('availability_status', 'unknown'),
+                region_data.get('product_url'),
+                region_data.get('best_deal_score', 0.0)
+            ))
+            
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error saving cross-region price: {e}")
+            return False
+    
+    def get_cross_region_prices(self, asin: str, max_age_minutes: int = 5) -> List[Dict]:
+        """Get cross-region prices for a product"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT * FROM cross_region_prices 
+                WHERE asin = ? 
+                AND last_checked >= datetime('now', '-' || ? || ' minutes')
+                ORDER BY total_cost ASC
+            ''', (asin, max_age_minutes))
+            
+            columns = [desc[0] for desc in cursor.description]
+            results = []
+            
+            for row in cursor.fetchall():
+                result = dict(zip(columns, row))
+                results.append(result)
+            
+            return results
+        except Exception as e:
+            logger.error(f"❌ Error getting cross-region prices: {e}")
+            return []
+    
+    def get_best_region_deals(self, limit: int = 10) -> List[Dict]:
+        """Get best cross-region deals across all products"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT DISTINCT crp.asin, 
+                       crp.region_code,
+                       crp.total_cost,
+                       crp.local_price,
+                       crp.local_currency,
+                       crp.product_url,
+                       p.product_name,
+                       p.currency as product_currency,
+                       crp.last_checked
+                FROM cross_region_prices crp
+                JOIN products p ON crp.asin = p.asin
+                WHERE crp.total_cost > 0
+                AND crp.total_cost = (
+                    SELECT MIN(total_cost) 
+                    FROM cross_region_prices 
+                    WHERE asin = crp.asin
+                    AND last_checked >= datetime('now', '-30 minutes')
+                )
+                ORDER BY crp.last_checked DESC
+                LIMIT ?
+            ''', (limit,))
+            
+            columns = [desc[0] for desc in cursor.description]
+            deals = []
+            
+            for row in cursor.fetchall():
+                deal = dict(zip(columns, row))
+                deals.append(deal)
+            
+            return deals
+        except Exception as e:
+            logger.error(f"❌ Error getting best region deals: {e}")
+            return []
+    
+    def get_comparison_history(self, asin: str, days: int = 7) -> List[Dict]:
+        """Get historical comparison data for a product"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT region_code, 
+                       AVG(total_cost) as avg_total_cost,
+                       MIN(total_cost) as min_total_cost,
+                       MAX(total_cost) as max_total_cost,
+                       COUNT(*) as data_points,
+                       MAX(last_checked) as last_checked
+                FROM cross_region_prices 
+                WHERE asin = ? 
+                AND last_checked >= datetime('now', '-' || ? || ' days')
+                GROUP BY region_code
+                ORDER BY avg_total_cost ASC
+            ''', (asin, days))
+            
+            columns = [desc[0] for desc in cursor.description]
+            results = []
+            
+            for row in cursor.fetchall():
+                result = dict(zip(columns, row))
+                results.append(result)
+            
+            return results
+        except Exception as e:
+            logger.error(f"❌ Error getting comparison history: {e}")
+            return []
+    
     def log_system_event(self, level: str, component: str, message: str, details: Dict = None):
         """Log system events"""
         try:
@@ -653,6 +843,22 @@ class SmartExtractionEngine:
         # Layer 3: Fallback
         logger.info(f"🔍 Layer 3: Fallback extraction for {asin}")
         return None, "All extraction methods failed"
+    
+    def extract_product_data_by_region(self, asin: str, region_code: str) -> Optional[Dict]:
+        """Extract product data for specific region"""
+        try:
+            region_config = REGION_CONFIGS[region_code]
+            url = f"https://{region_config['domain']}/dp/{asin}"
+            
+            headers = self._get_headers()
+            response = self.session.get(url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                product_data = self._parse_html(response.text, asin, region_code, region_config)
+                return product_data
+        except Exception as e:
+            logger.debug(f"Extraction failed for {asin} in {region_code}: {e}")
+        return None
     
     def _direct_extract(self, url: str, asin: str, region: str, region_config: Dict) -> Optional[Dict]:
         """Direct extraction method"""
@@ -1026,6 +1232,384 @@ class AIPricePredictor:
             logger.error(f"❌ Prediction error for {asin}: {e}")
             return None
 
+# 🔥 ==================== CROSS-REGION COMPARATOR ====================
+
+class CrossRegionComparator:
+    """
+    🔥 محرك مقارنة الأسعار بين المناطق
+    يقارن سعر المنتج في جميع المناطق المدعومة ويحدد أفضل صفقة
+    """
+    
+    def __init__(self, db_manager: UltimateDatabaseManager, extractor: SmartExtractionEngine):
+        self.db = db_manager
+        self.extractor = extractor
+        self.config = COMPARISON_CONFIG
+        logger.info("✅ Cross-Region Comparator initialized")
+    
+    def compare_product_prices(self, asin: str, target_region: str = None, force_refresh: bool = False) -> Dict:
+        """
+        🔍 مقارنة سعر المنتج عبر جميع المناطق
+        
+        الخوارزمية:
+        1. التحقق من التخزين المؤقت (5 دقائق)
+        2. استخراج الأسعار من جميع المناطق (بالتوازي)
+        3. تحويل الأسعار إلى عملة موحدة (USD)
+        4. حساب التكاليف الإضافية (الشحن، الضرائب)
+        5. تحديد أفضل وأسوأ منطقة
+        6. إنشاء توصية ذكية
+        """
+        if not self.config['enabled']:
+            return {
+                'status': 'disabled',
+                'message': 'Cross-region comparison is disabled'
+            }
+        
+        try:
+            logger.info(f"🔄 Starting cross-region comparison for {asin}")
+            
+            # 1. التحقق من التخزين المؤقت
+            if not force_refresh:
+                cached_prices = self.db.get_cross_region_prices(asin, self.config['cache_duration_minutes'])
+                if cached_prices:
+                    logger.info(f"📊 Using cached data for {asin}")
+                    return self._analyze_cached_prices(asin, cached_prices, target_region)
+            
+            # 2. استخراج الأسعار من جميع المناطق (بالتوازي)
+            region_prices = self._fetch_all_region_prices(asin)
+            
+            if not region_prices:
+                return {
+                    'status': 'error',
+                    'message': 'لم يتم العثور على المنتج في أي منطقة'
+                }
+            
+            # 3. تحليل وترتيب المناطق
+            comparison_result = self._analyze_regional_prices(
+                region_prices, 
+                target_region
+            )
+            
+            # 4. حفظ النتائج في قاعدة البيانات
+            self._save_comparison_results(asin, region_prices)
+            
+            # 5. إنشاء توصية ذكية
+            recommendation = self._generate_cross_region_recommendation(
+                comparison_result
+            )
+            
+            logger.info(f"✅ Comparison completed for {asin}")
+            logger.info(f"   🥇 Best region: {comparison_result['best_deal']['region_code']}")
+            logger.info(f"   💰 Savings: {comparison_result['savings_percentage']:.1f}%")
+            
+            return {
+                'status': 'success',
+                'asin': asin,
+                'timestamp': datetime.now().isoformat(),
+                'cached': False,
+                'comparison': comparison_result,
+                'recommendation': recommendation
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Cross-region comparison error: {e}")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+    
+    def _fetch_all_region_prices(self, asin: str) -> List[Dict]:
+        """جمع الأسعار من جميع المناطق (بالتوازي)"""
+        region_prices = []
+        
+        def fetch_region_price(region_code: str):
+            """استخراج سعر منطقة واحدة"""
+            try:
+                config = REGION_CONFIGS[region_code]
+                product_data = self.extractor.extract_product_data_by_region(asin, region_code)
+                
+                if product_data and product_data.get('current_price', 0) > 0:
+                    return {
+                        'region_code': region_code,
+                        'region_name': config['name'],
+                        'region_flag': config['flag'],
+                        'local_price': product_data['current_price'],
+                        'local_currency': config['currency'],
+                        'currency_symbol': config['currency_symbol'],
+                        'product_url': product_data.get('product_url'),
+                        'availability': product_data.get('availability_status', 'unknown'),
+                        'extraction_time': datetime.now().isoformat()
+                    }
+            except Exception as e:
+                logger.debug(f"❌ Failed to extract price for {region_code}: {e}")
+            return None
+        
+        # استخراج متزامن لجميع المناطق
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.config['parallel_workers']) as executor:
+            futures = {
+                executor.submit(fetch_region_price, region_code): region_code 
+                for region_code in REGION_CONFIGS.keys()
+            }
+            
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    region_prices.append(result)
+        
+        return region_prices
+    
+    def _analyze_cached_prices(self, asin: str, cached_prices: List[Dict], target_region: str = None) -> Dict:
+        """تحليل البيانات المخزنة مؤقتاً"""
+        try:
+            # تحويل البيانات المخزنة إلى تنسيق التحليل
+            region_prices = []
+            for cached in cached_prices:
+                region_code = cached['region_code']
+                config = REGION_CONFIGS.get(region_code, {})
+                
+                region_prices.append({
+                    'region_code': region_code,
+                    'region_name': config.get('name', region_code),
+                    'region_flag': config.get('flag', '🏳️'),
+                    'local_price': cached['local_price'],
+                    'local_currency': cached['local_currency'],
+                    'currency_symbol': REGION_CONFIGS.get(region_code, {}).get('currency_symbol', '$'),
+                    'product_url': cached.get('product_url'),
+                    'availability': cached.get('availability_status', 'unknown'),
+                    'converted_price_usd': cached.get('converted_price', 0.0),
+                    'shipping_cost_usd': cached.get('shipping_cost', 0.0),
+                    'total_cost_usd': cached.get('total_cost', 0.0),
+                    'extraction_time': cached.get('last_checked', datetime.now().isoformat())
+                })
+            
+            # تحليل البيانات
+            comparison_result = self._analyze_regional_prices(region_prices, target_region)
+            
+            return {
+                'status': 'success',
+                'asin': asin,
+                'timestamp': datetime.now().isoformat(),
+                'cached': True,
+                'comparison': comparison_result,
+                'recommendation': self._generate_cross_region_recommendation(comparison_result)
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error analyzing cached prices: {e}")
+            raise
+    
+    def _analyze_regional_prices(self, region_prices: List[Dict], target_region: str = None) -> Dict:
+        """تحليل وترتيب الأسعار الإقليمية"""
+        analyzed_regions = []
+        
+        for region_data in region_prices:
+            # تحويل السعر إلى USD
+            local_price = region_data['local_price']
+            local_currency = region_data['local_currency']
+            
+            if local_currency in EXCHANGE_RATES:
+                converted_price = local_price * EXCHANGE_RATES[local_currency]
+            else:
+                converted_price = local_price  # إذا لم نعرف سعر الصرف
+            
+            # إضافة التكاليف الإضافية
+            region_costs = REGIONAL_COSTS.get(region_data['region_code'], {})
+            shipping_cost = region_costs.get('shipping', 0.0) if self.config['include_shipping'] else 0.0
+            tax_rate = region_costs.get('tax', 0.0) if self.config['include_taxes'] else 0.0
+            import_duty = region_costs.get('import_duty', 0.0)
+            
+            # حساب التكلفة الإجمالية
+            tax_amount = (converted_price * tax_rate) / 100
+            duty_amount = (converted_price * import_duty) / 100
+            
+            total_cost = converted_price + shipping_cost + tax_amount + duty_amount
+            
+            # حساب "درجة الصفقة" (كلما قل السعر، زادت الدرجة)
+            base_score = 100 - (total_cost / 100)  # معادلة مبسطة
+            # زيادة الدرجة للمناطق الأقرب (تخفيض تكاليف الشحن)
+            if region_data['region_code'] in ['SA', 'AE']:
+                base_score += 10  # زيادة للأولوية الإقليمية
+            
+            analyzed_region = {
+                **region_data,
+                'converted_price_usd': round(converted_price, 2),
+                'shipping_cost_usd': round(shipping_cost, 2),
+                'tax_amount_usd': round(tax_amount, 2),
+                'duty_amount_usd': round(duty_amount, 2),
+                'total_cost_usd': round(total_cost, 2),
+                'deal_score': round(base_score, 1),
+                'cost_breakdown': {
+                    'product_price': round(converted_price, 2),
+                    'shipping': round(shipping_cost, 2),
+                    'tax': round(tax_amount, 2),
+                    'import_duty': round(duty_amount, 2)
+                }
+            }
+            
+            analyzed_regions.append(analyzed_region)
+        
+        # ترتيب المناطق حسب الأفضل (أقل تكلفة إجمالية)
+        analyzed_regions.sort(key=lambda x: x['total_cost_usd'])
+        
+        # تحديد المنطقة المستهدفة (إن وجدت)
+        target_region_data = None
+        if target_region:
+            for region in analyzed_regions:
+                if region['region_code'] == target_region:
+                    target_region_data = region
+                    break
+        
+        # العثور على أفضل وأسوأ منطقة
+        best_deal = analyzed_regions[0] if analyzed_regions else None
+        worst_deal = analyzed_regions[-1] if len(analyzed_regions) > 1 else None
+        
+        # حساب النسبة المئوية للتوفير
+        savings_percentage = 0.0
+        if best_deal and worst_deal and worst_deal['total_cost_usd'] > 0:
+            savings_percentage = ((worst_deal['total_cost_usd'] - best_deal['total_cost_usd']) 
+                                 / worst_deal['total_cost_usd'] * 100)
+        
+        return {
+            'all_regions': analyzed_regions,
+            'best_deal': best_deal,
+            'worst_deal': worst_deal,
+            'target_region': target_region_data,
+            'savings_percentage': round(savings_percentage, 2),
+            'currency_base': 'USD',
+            'regions_count': len(analyzed_regions),
+            'analysis_timestamp': datetime.now().isoformat()
+        }
+    
+    def _save_comparison_results(self, asin: str, region_prices: List[Dict]):
+        """حفظ نتائج المقارنة في قاعدة البيانات"""
+        try:
+            for region_data in region_prices:
+                # حساب التكاليف للخزن
+                local_currency = region_data['local_currency']
+                local_price = region_data['local_price']
+                
+                if local_currency in EXCHANGE_RATES:
+                    converted_price = local_price * EXCHANGE_RATES[local_currency]
+                else:
+                    converted_price = local_price
+                
+                region_costs = REGIONAL_COSTS.get(region_data['region_code'], {})
+                shipping_cost = region_costs.get('shipping', 0.0) if self.config['include_shipping'] else 0.0
+                tax_rate = region_costs.get('tax', 0.0) if self.config['include_taxes'] else 0.0
+                import_duty = region_costs.get('import_duty', 0.0)
+                
+                tax_amount = (converted_price * tax_rate) / 100
+                duty_amount = (converted_price * import_duty) / 100
+                total_cost = converted_price + shipping_cost + tax_amount + duty_amount
+                
+                save_data = {
+                    'region_code': region_data['region_code'],
+                    'local_price': local_price,
+                    'local_currency': local_currency,
+                    'converted_price': round(converted_price, 2),
+                    'shipping_cost': round(shipping_cost, 2),
+                    'tax_percentage': tax_rate,
+                    'import_duty_percentage': import_duty,
+                    'total_cost': round(total_cost, 2),
+                    'availability_status': region_data.get('availability', 'unknown'),
+                    'product_url': region_data.get('product_url'),
+                    'best_deal_score': region_data.get('deal_score', 0.0)
+                }
+                
+                self.db.save_cross_region_price(asin, save_data)
+                
+        except Exception as e:
+            logger.error(f"❌ Error saving comparison results: {e}")
+    
+    def _generate_cross_region_recommendation(self, comparison: Dict) -> Dict:
+        """إنشاء توصية ذكية بناءً على نتائج المقارنة"""
+        best_deal = comparison['best_deal']
+        worst_deal = comparison.get('worst_deal')
+        savings = comparison['savings_percentage']
+        
+        if not best_deal:
+            return {
+                'type': 'NEUTRAL',
+                'emoji': '⚪',
+                'color': '#9E9E9E',
+                'title': 'بيانات غير كافية',
+                'message': 'لا توجد بيانات كافية لمقارنة الأسعار بين المناطق',
+                'action': 'wait',
+                'priority': 0
+            }
+        
+        if savings > 20:
+            # توفير كبير - صفقة ممتازة
+            return {
+                'type': 'HOT_DEAL',
+                'emoji': '🔥',
+                'color': '#FF5722',
+                'title': '🔥 صفقة ساخنة في منطقة أخرى!',
+                'message': f'توفير يصل إلى {savings:.1f}% مقارنة بأغلى منطقة',
+                'details': f'اشتري من {best_deal["region_name"]} {best_deal["region_flag"]} ووفر ${(worst_deal["total_cost_usd"] - best_deal["total_cost_usd"]):.2f}',
+                'action': 'buy_from_region',
+                'recommended_region': best_deal['region_code'],
+                'savings_amount': worst_deal['total_cost_usd'] - best_deal['total_cost_usd'],
+                'savings_percentage': savings,
+                'priority': 3
+            }
+        elif savings > 10:
+            # توفير جيد
+            return {
+                'type': 'GOOD_DEAL',
+                'emoji': '💰',
+                'color': '#4CAF50',
+                'title': '💰 توفير جيد في منطقة أخرى',
+                'message': f'وفر {savings:.1f}% بشراء من {best_deal["region_name"]}',
+                'action': 'consider_region',
+                'recommended_region': best_deal['region_code'],
+                'priority': 2
+            }
+        else:
+            # لا فرق كبير
+            return {
+                'type': 'SIMILAR',
+                'emoji': '⚖️',
+                'color': '#2196F3',
+                'title': '⚖️ الأسعار متقاربة',
+                'message': 'لا يوجد فرق كبير في الأسعار بين المناطق',
+                'action': 'buy_local',
+                'reason': 'تكاليف الشحن والضرائب تساوي الفرق في السعر',
+                'priority': 1
+            }
+    
+    def get_best_region_deals(self, limit: int = 10) -> List[Dict]:
+        """الحصول على أفضل صفقات المناطق"""
+        try:
+            deals = self.db.get_best_region_deals(limit)
+            
+            # إضافة معلومات إضافية
+            for deal in deals:
+                region_code = deal['region_code']
+                deal['region_name'] = REGION_CONFIGS.get(region_code, {}).get('name', region_code)
+                deal['region_flag'] = REGION_CONFIGS.get(region_code, {}).get('flag', '🏳️')
+                deal['currency_symbol'] = REGION_CONFIGS.get(region_code, {}).get('currency_symbol', '$')
+            
+            return deals
+        except Exception as e:
+            logger.error(f"❌ Error getting best region deals: {e}")
+            return []
+    
+    def get_comparison_history(self, asin: str, days: int = 7) -> List[Dict]:
+        """الحصول على تاريخ مقارنات المنتج"""
+        try:
+            history = self.db.get_comparison_history(asin, days)
+            
+            # إضافة معلومات إضافية
+            for item in history:
+                region_code = item['region_code']
+                item['region_name'] = REGION_CONFIGS.get(region_code, {}).get('name', region_code)
+                item['region_flag'] = REGION_CONFIGS.get(region_code, {}).get('flag', '🏳️')
+            
+            return history
+        except Exception as e:
+            logger.error(f"❌ Error getting comparison history: {e}")
+            return []
+
 # ==================== NOTIFICATION MANAGER ====================
 
 class NotificationManager:
@@ -1137,16 +1721,17 @@ class NotificationManager:
 app = Flask(__name__)
 
 class UltimateTrackerSystem:
-    """Ultimate Amazon Price Tracker System with Smart Recommendations"""
+    """Ultimate Amazon Price Tracker System with Smart Recommendations & Cross-Region Comparison"""
     
     def __init__(self):
         self.db = UltimateDatabaseManager()
         self.extractor = SmartExtractionEngine()
         self.predictor = AIPricePredictor(self.db)
-        self.analyzer = SmartPriceAnalyzer(self.db)  # 🆕
+        self.analyzer = SmartPriceAnalyzer(self.db)
+        self.comparator = CrossRegionComparator(self.db, self.extractor)  # 🔥
         self.notifier = NotificationManager()
         self.setup_routes()
-        logger.info("✅ Ultimate Tracker System initialized")
+        logger.info("✅ Ultimate Tracker System initialized with Cross-Region Comparison")
     
     def setup_routes(self):
         """Setup Flask routes"""
@@ -1175,18 +1760,28 @@ class UltimateTrackerSystem:
                 # Generate prediction
                 prediction = self.predictor.predict_price(product_data['asin'])
                 
-                # 🆕 Generate smart recommendation
+                # Generate smart recommendation
                 recommendation = self.analyzer.analyze_price(
                     product_data['asin'],
                     product_data['current_price'],
                     product_data['currency']
                 )
                 
+                # 🔥 Automatically compare regions for new products
+                if COMPARISON_CONFIG['enabled']:
+                    comparison_thread = threading.Thread(
+                        target=self.comparator.compare_product_prices,
+                        args=(product_data['asin'],),
+                        kwargs={'force_refresh': True}
+                    )
+                    comparison_thread.daemon = True
+                    comparison_thread.start()
+                
                 return jsonify({
                     'status': 'success',
                     'product': product_data,
                     'prediction': prediction,
-                    'recommendation': recommendation,  # 🆕
+                    'recommendation': recommendation,
                     'extraction_method': method
                 })
                 
@@ -1199,10 +1794,17 @@ class UltimateTrackerSystem:
             region = request.args.get('region')
             products = self.db.get_products(region=region)
             
-            # 🆕 إضافة التوصية لكل منتج
+            # إضافة التوصية لكل منتج
             for product in products:
                 rec = self.db.get_latest_recommendation(product['asin'])
                 product['recommendation'] = rec
+                
+                # 🔥 إضافة معلومات المقارنة إذا كانت متاحة
+                if COMPARISON_CONFIG['enabled']:
+                    cached_prices = self.db.get_cross_region_prices(product['asin'], 30)
+                    if cached_prices:
+                        product['has_cross_region_data'] = True
+                        product['regions_available'] = len(cached_prices)
             
             return jsonify({'status': 'success', 'products': products, 'count': len(products)})
         
@@ -1222,7 +1824,6 @@ class UltimateTrackerSystem:
             else:
                 return jsonify({'status': 'error', 'message': 'Insufficient data'}), 400
         
-        # 🆕 endpoint للتوصية
         @app.route('/api/product/<asin>/recommendation')
         def get_recommendation(asin):
             rec = self.db.get_latest_recommendation(asin)
@@ -1230,6 +1831,51 @@ class UltimateTrackerSystem:
                 return jsonify({'status': 'success', 'recommendation': rec})
             else:
                 return jsonify({'status': 'error', 'message': 'No recommendation available'}), 404
+        
+        # 🔥 Cross-Region Comparison APIs
+        
+        @app.route('/api/product/<asin>/compare-regions')
+        def compare_regions(asin):
+            try:
+                target_region = request.args.get('target_region')
+                force_refresh = request.args.get('refresh', 'false').lower() == 'true'
+                
+                result = self.comparator.compare_product_prices(asin, target_region, force_refresh)
+                return jsonify(result)
+                
+            except Exception as e:
+                logger.error(f"Error in region comparison: {e}")
+                return jsonify({'status': 'error', 'message': str(e)}), 500
+        
+        @app.route('/api/product/<asin>/comparison-history')
+        def get_comparison_history(asin):
+            try:
+                days = request.args.get('days', 7, type=int)
+                history = self.comparator.get_comparison_history(asin, days)
+                return jsonify({
+                    'status': 'success',
+                    'asin': asin,
+                    'history': history,
+                    'days_analyzed': days
+                })
+            except Exception as e:
+                return jsonify({'status': 'error', 'message': str(e)}), 500
+        
+        @app.route('/api/best-region-deals')
+        def get_best_region_deals():
+            try:
+                limit = request.args.get('limit', 10, type=int)
+                deals = self.comparator.get_best_region_deals(limit)
+                
+                return jsonify({
+                    'status': 'success',
+                    'deals': deals,
+                    'count': len(deals),
+                    'feature': 'cross_region_comparison'
+                })
+                
+            except Exception as e:
+                return jsonify({'status': 'error', 'message': str(e)}), 500
         
         @app.route('/api/regions')
         def get_regions():
@@ -1239,7 +1885,9 @@ class UltimateTrackerSystem:
                     'name': config['name'],
                     'flag': config['flag'],
                     'currency': config['currency'],
-                    'domain': config['domain']
+                    'currency_symbol': config['currency_symbol'],
+                    'domain': config['domain'],
+                    'costs': REGIONAL_COSTS.get(code, {})
                 }
                 for code, config in REGION_CONFIGS.items()
             ]
@@ -1263,9 +1911,16 @@ class UltimateTrackerSystem:
                 cursor.execute('SELECT COUNT(*) FROM price_alerts WHERE DATE(alert_sent_at) = DATE("now")')
                 alerts_today = cursor.fetchone()[0]
                 
-                # 🆕 إحصائيات التوصيات
+                # إحصائيات التوصيات
                 cursor.execute('SELECT COUNT(*) FROM price_recommendations WHERE recommendation_type = "BUY"')
                 buy_recommendations = cursor.fetchone()[0]
+                
+                # 🔥 إحصائيات المقارنة بين المناطق
+                cursor.execute('SELECT COUNT(DISTINCT asin) FROM cross_region_prices')
+                products_with_comparison = cursor.fetchone()[0]
+                
+                cursor.execute('SELECT COUNT(*) FROM cross_region_prices WHERE last_checked >= datetime("now", "-1 hour")')
+                recent_comparisons = cursor.fetchone()[0]
                 
                 return jsonify({
                     'status': 'success',
@@ -1274,7 +1929,9 @@ class UltimateTrackerSystem:
                         'regions_count': regions_count,
                         'avg_discount': round(avg_discount, 2),
                         'alerts_today': alerts_today,
-                        'buy_recommendations': buy_recommendations  # 🆕
+                        'buy_recommendations': buy_recommendations,
+                        'products_with_comparison': products_with_comparison,  # 🔥
+                        'recent_comparisons': recent_comparisons  # 🔥
                     }
                 })
             except Exception as e:
@@ -1289,7 +1946,8 @@ class UltimateTrackerSystem:
                 'features': {
                     'multi_region': True,
                     'ai_prediction': AI_PREDICTION_CONFIG['enabled'],
-                    'smart_recommendations': RECOMMENDATION_CONFIG['enabled'],  # 🆕
+                    'smart_recommendations': RECOMMENDATION_CONFIG['enabled'],
+                    'cross_region_comparison': COMPARISON_CONFIG['enabled'],  # 🔥
                     'notifications': NOTIFICATION_CONFIG['email']['enabled'],
                     'analytics': ANALYTICS_CONFIG['enabled']
                 }
@@ -1336,6 +1994,21 @@ DASHBOARD_TEMPLATE = '''
             display: inline-block;
             font-weight: bold;
         }
+        .new-feature-badge {
+            background: linear-gradient(135deg, #FF416C 0%, #FF4B2B 100%);
+            color: white;
+            padding: 8px 20px;
+            border-radius: 20px;
+            display: inline-block;
+            font-weight: bold;
+            margin-left: 10px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
 
         .stats-grid {
             display: grid;
@@ -1361,6 +2034,20 @@ DASHBOARD_TEMPLATE = '''
             margin: 10px 0;
         }
         .stat-label { color: #666; font-size: 0.9rem; }
+        
+        .feature-highlight {
+            background: linear-gradient(135deg, #FF416C 0%, #FF4B2B 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .feature-highlight h2 {
+            margin-bottom: 10px;
+            font-size: 1.8rem;
+        }
         
         .main-content {
             display: grid;
@@ -1403,6 +2090,21 @@ DASHBOARD_TEMPLATE = '''
             transition: transform 0.3s;
         }
         .btn-primary:hover { transform: scale(1.05); }
+        
+        .btn-hot {
+            background: linear-gradient(135deg, #FF416C 0%, #FF4B2B 100%);
+            color: white;
+            border: none;
+            padding: 15px;
+            border-radius: 10px;
+            width: 100%;
+            font-size: 1.1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.3s;
+            margin-top: 10px;
+        }
+        .btn-hot:hover { transform: scale(1.05); }
         
         .region-selector {
             display: grid;
@@ -1451,7 +2153,6 @@ DASHBOARD_TEMPLATE = '''
             border-radius: 15px;
         }
         
-        /* 🆕 Recommendation Badges */
         .rec-badge {
             padding: 8px 15px;
             border-radius: 20px;
@@ -1462,6 +2163,16 @@ DASHBOARD_TEMPLATE = '''
         .rec-buy { background: #4CAF50; color: white; }
         .rec-wait { background: #FF9800; color: white; }
         .rec-dont-buy { background: #F44336; color: white; }
+        
+        .comparison-badge {
+            background: #FF416C;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            display: inline-block;
+            margin-left: 5px;
+        }
         
         .loading {
             text-align: center;
@@ -1499,7 +2210,6 @@ DASHBOARD_TEMPLATE = '''
             margin-top: 10px;
         }
         
-        /* 🆕 Recommendation Card */
         .recommendation-card {
             background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
             padding: 15px;
@@ -1507,14 +2217,95 @@ DASHBOARD_TEMPLATE = '''
             margin-top: 10px;
             border-left: 4px solid #667eea;
         }
+        
+        .comparison-section {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin-top: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none;
+        }
+        
+        .comparison-results {
+            max-height: 500px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        
+        .region-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+        }
+        .region-card.best {
+            background: #e8f5e9;
+            border-left: 4px solid #4CAF50;
+        }
+        .region-card.worst {
+            background: #ffebee;
+            border-left: 4px solid #F44336;
+        }
+        
+        .deal-card {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+        }
+        
+        .profit-guide {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin: 40px 0;
+            text-align: center;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🚀 Ultimate Amazon Price Tracker</h1>
-            <p style="color: #666; margin: 10px 0;">AI-Powered • Multi-Region • Smart Recommendations 🆕</p>
+            <p style="color: #666; margin: 10px 0;">AI-Powered • Multi-Region • Smart Recommendations • 🔥 Cross-Region Comparison</p>
             <span class="version-badge">v''' + VERSION + '''</span>
+            <span class="new-feature-badge">🔥 NEW: Cross-Region Price Comparison</span>
+        </div>
+
+        <div class="feature-highlight">
+            <h2>🔥 اكتشف فرق الأسعار بين الدول</h2>
+            <p>احصل على نفس المنتج بسعر أقل في دولة أخرى مع إمكانية الشحن الدولي</p>
+            <p style="margin-top: 10px; font-size: 1.1rem;">
+                مثال: iPhone 15 Pro - السعودية: 4,999 ريال 🇸🇦 | الإمارات: 3,999 درهم 🇦🇪
+                <br>
+                <strong>التوفير: 244 دولار (18.3%)</strong>
+            </p>
         </div>
 
         <div class="stats-grid">
@@ -1527,8 +2318,8 @@ DASHBOARD_TEMPLATE = '''
                 <div class="stat-value" id="regionsCount">0</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">Avg Discount</div>
-                <div class="stat-value" id="avgDiscount">0%</div>
+                <div class="stat-label">🔥 Cross-Region Deals</div>
+                <div class="stat-value" id="comparisonProducts">0</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">🟢 Buy Now</div>
@@ -1545,6 +2336,9 @@ DASHBOARD_TEMPLATE = '''
                            placeholder="Paste Amazon product URL...">
                     <button class="btn-primary" onclick="addProduct()">
                         🔍 Track Product
+                    </button>
+                    <button class="btn-hot" onclick="toggleComparisonSection()">
+                        🔥 Compare Across Regions
                     </button>
                 </div>
                 
@@ -1571,7 +2365,7 @@ DASHBOARD_TEMPLATE = '''
                                 <th>Region</th>
                                 <th>Price</th>
                                 <th>Discount</th>
-                                <th>🆕 Recommendation</th>
+                                <th>Recommendation</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -1580,9 +2374,88 @@ DASHBOARD_TEMPLATE = '''
                 </div>
             </div>
         </div>
+        
+        <!-- 🔥 Cross-Region Comparison Section -->
+        <div class="comparison-section" id="comparisonSection">
+            <h2 style="color: #333; margin-bottom: 20px;">🔥 مقارنة الأسعار بين المناطق</h2>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                <button class="btn-primary" onclick="compareRegions()" id="compareBtn">
+                    🔄 مقارنة الأسعار بين المناطق
+                </button>
+                <button class="btn-hot" onclick="loadBestRegionDeals()">
+                    💰 أفضل صفقات المناطق
+                </button>
+                <button class="btn-primary" onclick="showComparisonHistory()" style="background: #607d8b;">
+                    📊 سجل المقارنات
+                </button>
+            </div>
+            
+            <div style="background: #f0f4ff; padding: 15px; border-radius: 10px; margin-bottom: 20px;">
+                <label style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="includeShipping" checked>
+                    <span>تضمين تكاليف الشحن</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
+                    <input type="checkbox" id="includeTaxes" checked>
+                    <span>تضمين الضرائب والجمارك</span>
+                </label>
+            </div>
+            
+            <div id="comparisonLoading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>جاري مقارنة الأسعار بين جميع المناطق...</p>
+                <p style="font-size: 0.9rem; color: #666;">قد يستغرق هذا بضع ثواني</p>
+            </div>
+            
+            <div id="comparisonResults" style="display: none;"></div>
+            
+            <div id="bestDealsSection" style="margin-top: 40px; display: none;">
+                <h3 style="color: #333; margin-bottom: 15px;">💰 أفضل صفقات المناطق</h3>
+                <div id="bestDealsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;"></div>
+            </div>
+        </div>
+        
+        <!-- Profit Guide -->
+        <div class="profit-guide">
+            <h2 style="margin: 0 0 10px 0;">🚀 كيف تربح من فرق الأسعار بين المناطق؟</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-top: 20px;">
+                <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+                    <div style="font-size: 2rem; margin-bottom: 10px;">🛒</div>
+                    <div style="font-weight: bold;">اشترِ من أرخص منطقة</div>
+                    <p style="font-size: 0.9rem; margin: 10px 0 0 0;">اشتري نفس المنتج من أمازون الإمارات بدلاً من السعودية ووفر حتى 30%</p>
+                </div>
+                <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+                    <div style="font-size: 2rem; margin-bottom: 10px;">💰</div>
+                    <div style="font-weight: bold;">استخدم روابط الأفلييت</div>
+                    <p style="font-size: 0.9rem; margin: 10px 0 0 0;">اربح عمولة من كل عملية شراء عبر روابطك في المناطق المختلفة</p>
+                </div>
+                <div style="background: rgba(255,255,255,0.2); padding: 15px; border-radius: 10px;">
+                    <div style="font-size: 2rem; margin-bottom: 10px;">🌐</div>
+                    <div style="font-weight: bold;">استغل فروق العملات</div>
+                    <p style="font-size: 0.9rem; margin: 10px 0 0 0;">انخفاض اليورو أو الجنيه الإسترليني قد يعني فرصة ذهبية للشراء</p>
+                </div>
+            </div>
+            <button onclick="showProfitGuide()" style="background: white; color: #FF416C; padding: 12px 30px; 
+                border: none; border-radius: 25px; font-weight: bold; margin-top: 20px; cursor: pointer;">
+                📚 دليل الربح من فرق الأسعار
+            </button>
+        </div>
+    </div>
+
+    <!-- Modal for History -->
+    <div class="modal" id="historyModal">
+        <div class="modal-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="color: #333; margin: 0;">📊 سجل مقارنات المناطق</h3>
+                <button onclick="closeModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666;">×</button>
+            </div>
+            <div id="historyContent"></div>
+        </div>
     </div>
 
     <script>
+        let selectedProductASIN = null;
         let selectedRegion = null;
         
         document.addEventListener('DOMContentLoaded', function() {
@@ -1599,7 +2472,7 @@ DASHBOARD_TEMPLATE = '''
                 if (data.status === 'success') {
                     document.getElementById('totalProducts').textContent = data.stats.total_products;
                     document.getElementById('regionsCount').textContent = data.stats.regions_count;
-                    document.getElementById('avgDiscount').textContent = data.stats.avg_discount.toFixed(1) + '%';
+                    document.getElementById('comparisonProducts').textContent = data.stats.products_with_comparison || 0;
                     document.getElementById('buyRecommendations').textContent = data.stats.buy_recommendations || 0;
                 }
             } catch (error) {
@@ -1660,11 +2533,16 @@ DASHBOARD_TEMPLATE = '''
                             recBadge = `<span class="rec-badge ${badgeClass}">${rec.badge_emoji} ${rec.text}</span>`;
                         }
                         
+                        // 🔥 إضافة شارة المقارنة إذا كانت البيانات متاحة
+                        const comparisonBadge = p.has_cross_region_data ? 
+                            `<span class="comparison-badge" title="متاح في ${p.regions_available} منطقة">🔥 ${p.regions_available}</span>` : '';
+                        
                         return `
                         <tr>
                             <td>
                                 <strong>${p.product_name.substring(0, 50)}...</strong><br>
                                 <code style="font-size: 0.8rem; color: #666;">${p.asin}</code>
+                                ${comparisonBadge}
                             </td>
                             <td>
                                 <div style="font-size: 1.2rem;">${p.metadata && p.metadata.region_flag ? p.metadata.region_flag : ''}</div>
@@ -1682,8 +2560,11 @@ DASHBOARD_TEMPLATE = '''
                                 ${recBadge}
                             </td>
                             <td>
-                                <button onclick="showDetails('${p.asin}')" style="padding: 5px 15px; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; border: none; border-radius: 5px; cursor: pointer;">
+                                <button onclick="showProductDetails('${p.asin}')" style="padding: 5px 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 5px;">
                                     📊 Details
+                                </button>
+                                <button onclick="compareProductRegions('${p.asin}')" style="padding: 5px 15px; background: linear-gradient(135deg, #FF416C 0%, #FF4B2B 100%); color: white; border: none; border-radius: 5px; cursor: pointer; width: 100%;">
+                                    🔥 Compare
                                 </button>
                             </td>
                         </tr>
@@ -1753,6 +2634,10 @@ DASHBOARD_TEMPLATE = '''
                                 Confidence: <strong>${data.prediction.confidence_score.toFixed(1)}%</strong>
                             </div>
                         ` : ''}
+                        <div style="margin-top: 15px; padding: 15px; background: #e3f2fd; border-radius: 10px;">
+                            <strong>🔥 Cross-Region Comparison:</strong><br>
+                            <span style="font-size: 0.9rem; color: #555;">تم بدء مقارنة الأسعار بين المناطق في الخلفية. استخدم زر "Compare" لرؤية النتائج.</span>
+                        </div>
                     `;
                     
                     document.getElementById('productUrl').value = '';
@@ -1769,42 +2654,399 @@ DASHBOARD_TEMPLATE = '''
             }
         }
         
-        async function showDetails(asin) {
-            try {
-                const [recResponse, predResponse, histResponse] = await Promise.all([
-                    fetch(`/api/product/${asin}/recommendation`),
-                    fetch(`/api/product/${asin}/predict`),
-                    fetch(`/api/product/${asin}/history?days=30`)
-                ]);
-                
-                const rec = await recResponse.json();
-                const pred = await predResponse.json();
-                const hist = await histResponse.json();
-                
-                let message = `📊 Product Details: ${asin}\n\n`;
-                
-                if (rec.status === 'success') {
-                    const r = rec.recommendation;
-                    message += `🎯 RECOMMENDATION: ${r.badge_emoji} ${r.text}\n`;
-                    message += `${r.reasoning}\n`;
-                    message += `Confidence: ${r.confidence_score.toFixed(1)}%\n\n`;
-                }
-                
-                if (pred.status === 'success') {
-                    message += `🔮 AI PREDICTION:\n`;
-                    message += `Predicted Price (30d): ${pred.prediction.predicted_price}\n`;
-                    message += `Trend: ${pred.prediction.trend}\n\n`;
-                }
-                
-                if (hist.status === 'success') {
-                    message += `📈 PRICE HISTORY (30 days):\n`;
-                    message += `Total Records: ${hist.count}\n`;
-                }
-                
-                alert(message);
-            } catch (error) {
-                alert('Error loading details');
+        function showProductDetails(asin) {
+            selectedProductASIN = asin;
+            toggleComparisonSection();
+            compareRegions();
+        }
+        
+        function compareProductRegions(asin) {
+            selectedProductASIN = asin;
+            toggleComparisonSection();
+            compareRegions();
+        }
+        
+        function toggleComparisonSection() {
+            const section = document.getElementById('comparisonSection');
+            section.style.display = section.style.display === 'none' ? 'block' : 'none';
+            if (section.style.display === 'block') {
+                section.scrollIntoView({ behavior: 'smooth' });
             }
+        }
+        
+        async function compareRegions() {
+            if (!selectedProductASIN) {
+                const asin = prompt('Enter product ASIN:');
+                if (!asin) return;
+                selectedProductASIN = asin;
+            }
+            
+            const loading = document.getElementById('comparisonLoading');
+            const results = document.getElementById('comparisonResults');
+            const btn = document.getElementById('compareBtn');
+            
+            loading.style.display = 'block';
+            results.style.display = 'none';
+            btn.disabled = true;
+            
+            try {
+                const includeShipping = document.getElementById('includeShipping').checked;
+                const includeTaxes = document.getElementById('includeTaxes').checked;
+                
+                const response = await fetch(`/api/product/${selectedProductASIN}/compare-regions?refresh=true`);
+                const data = await response.json();
+                
+                loading.style.display = 'none';
+                btn.disabled = false;
+                
+                if (data.status === 'success') {
+                    displayComparisonResults(data);
+                    loadBestRegionDeals();
+                } else {
+                    results.innerHTML = `
+                        <div class="error-box" style="padding: 20px; background: #ffebee; border-left: 4px solid #f44336; border-radius: 10px;">
+                            <h4 style="color: #c62828; margin: 0 0 10px 0;">❌ خطأ في المقارنة</h4>
+                            <p>${data.message}</p>
+                        </div>
+                    `;
+                    results.style.display = 'block';
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                btn.disabled = false;
+                results.innerHTML = `
+                    <div class="error-box">
+                        <h4>❌ خطأ في الاتصال</h4>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+                results.style.display = 'block';
+            }
+        }
+        
+        function displayComparisonResults(data) {
+            const results = document.getElementById('comparisonResults');
+            const comparison = data.comparison;
+            
+            if (!comparison || comparison.regions_count === 0) {
+                results.innerHTML = `
+                    <div style="text-align: center; padding: 40px; background: #f5f5f5; border-radius: 10px;">
+                        <h4 style="color: #666;">🌐 لا توجد بيانات للمقارنة</h4>
+                        <p>لم يتم العثور على المنتج في المناطق الأخرى</p>
+                    </div>
+                `;
+                results.style.display = 'block';
+                return;
+            }
+            
+            let html = `
+                <div style="background: white; border-radius: 15px; padding: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.1);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3 style="color: #333; margin: 0;">
+                            ${data.cached ? '🔄 (بيانات مخزنة)' : '🌍'} مقارنة الأسعار بين ${comparison.regions_count} منطقة
+                        </h3>
+                        <div style="font-size: 0.9rem; color: #666;">
+                            ${new Date(comparison.analysis_timestamp).toLocaleString()}
+                        </div>
+                    </div>
+                    
+                    ${data.recommendation ? `
+                        <div style="background: linear-gradient(135deg, ${data.recommendation.color}20 0%, ${data.recommendation.color}40 100%); 
+                             padding: 20px; border-radius: 10px; margin-bottom: 25px; border-left: 4px solid ${data.recommendation.color};">
+                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                                <span style="font-size: 1.5rem;">${data.recommendation.emoji}</span>
+                                <h4 style="margin: 0; color: ${data.recommendation.color};">${data.recommendation.title}</h4>
+                            </div>
+                            <p style="margin: 0; font-size: 1.1rem; color: #333;">${data.recommendation.message}</p>
+                            ${data.recommendation.details ? `
+                                <p style="margin: 10px 0 0 0; font-size: 1rem; color: #555; font-weight: bold;">${data.recommendation.details}</p>
+                            ` : ''}
+                            ${comparison.savings_percentage > 0 ? `
+                                <div style="margin-top: 15px; padding: 10px; background: white; border-radius: 8px; display: inline-block;">
+                                    <span style="color: #4CAF50; font-weight: bold;">💵 توفير يصل إلى ${comparison.savings_percentage.toFixed(1)}%</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                    ` : ''}
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px;">
+            `;
+            
+            // عرض كل منطقة
+            comparison.all_regions.forEach((region, index) => {
+                const isBest = index === 0;
+                const isWorst = index === comparison.all_regions.length - 1;
+                
+                html += `
+                    <div class="region-card ${isBest ? 'best' : isWorst ? 'worst' : ''}" style="background: ${isBest ? '#e8f5e9' : isWorst ? '#ffebee' : '#f8f9fa'}; 
+                         padding: 20px; border-radius: 10px; 
+                         border-left: 4px solid ${isBest ? '#4CAF50' : isWorst ? '#F44336' : '#9E9E9E'};">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <div>
+                                <div style="font-size: 1.2rem; font-weight: bold;">${region.region_flag} ${region.region_name}</div>
+                                <div style="font-size: 0.9rem; color: #666;">${region.region_code}</div>
+                            </div>
+                            <div style="text-align: right;">
+                                ${isBest ? '<span style="background: #4CAF50; color: white; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem;">🥇 أفضل سعر</span>' : ''}
+                                ${isWorst ? '<span style="background: #F44336; color: white; padding: 5px 10px; border-radius: 15px; font-size: 0.8rem;">📈 أغلى سعر</span>' : ''}
+                            </div>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-size: 1.5rem; font-weight: bold; color: ${isBest ? '#2E7D32' : '#333'};">
+                                ${region.currency_symbol}${region.local_price.toFixed(2)} 
+                                <span style="font-size: 0.9rem; color: #666;">($${region.converted_price_usd.toFixed(2)})</span>
+                            </div>
+                            <div style="font-size: 0.9rem; color: #666;">
+                                ${region.local_currency} → USD
+                            </div>
+                        </div>
+                        
+                        <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                            <div style="font-weight: bold; margin-bottom: 10px; color: #333;">تفصيل التكاليف (USD):</div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span>سعر المنتج:</span>
+                                <span>$${region.cost_breakdown.product_price.toFixed(2)}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span>الشحن:</span>
+                                <span>$${region.cost_breakdown.shipping.toFixed(2)}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <span>الضرائب:</span>
+                                <span>$${region.cost_breakdown.tax.toFixed(2)}</span>
+                            </div>
+                            ${region.cost_breakdown.import_duty > 0 ? `
+                                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                    <span>الجمارك:</span>
+                                    <span>$${region.cost_breakdown.import_duty.toFixed(2)}</span>
+                                </div>
+                            ` : ''}
+                            <div style="display: flex; justify-content: space-between; margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; font-weight: bold; color: ${isBest ? '#2E7D32' : '#333'};">
+                                <span>التكلفة الإجمالية:</span>
+                                <span>$${region.total_cost_usd.toFixed(2)}</span>
+                            </div>
+                        </div>
+                        
+                        <div style="text-align: center;">
+                            <a href="${region.product_url}" target="_blank" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                               color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+                                🛒 اشترِ من ${region.region_flag}
+                            </a>
+                        </div>
+                        
+                        <div style="margin-top: 15px; font-size: 0.8rem; color: #666; text-align: center;">
+                            <span style="background: #e0e0e0; padding: 3px 10px; border-radius: 10px;">
+                                درجة الصفقة: ${region.deal_score}/100
+                            </span>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `
+                    </div>
+                    
+                    <div style="background: #e3f2fd; padding: 20px; border-radius: 10px; margin-top: 20px;">
+                        <h4 style="color: #1565c0; margin: 0 0 10px 0;">💡 كيف تستفيد من المقارنة؟</h4>
+                        <ul style="margin: 0; padding-left: 20px; color: #333;">
+                            <li>اشتري من المنطقة ذات السعر الأقل حتى مع تكاليف الشحن</li>
+                            <li>استخدم خدمات الشحن الدولية الموثوقة</li>
+                            <li>تحقق من سياسة الضمان والمرتجعات لكل منطقة</li>
+                            <li>راجع تقييمات المنتج في كل منطقة للتأكد من الجودة</li>
+                        </ul>
+                        ${comparison.best_deal && comparison.savings_percentage > 10 ? `
+                            <div style="margin-top: 15px; padding: 15px; background: #4CAF50; color: white; border-radius: 8px;">
+                                <strong>🎯 نصيحة سريعة:</strong> اشترِ من ${comparison.best_deal.region_name} ${comparison.best_deal.region_flag} 
+                                ووفر <strong>$${(comparison.worst_deal.total_cost_usd - comparison.best_deal.total_cost_usd).toFixed(2)}</strong> 
+                                (${comparison.savings_percentage.toFixed(1)}% توفير)!
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+            
+            results.innerHTML = html;
+            results.style.display = 'block';
+        }
+        
+        async function loadBestRegionDeals() {
+            try {
+                const response = await fetch('/api/best-region-deals');
+                const data = await response.json();
+                
+                if (data.status === 'success' && data.deals.length > 0) {
+                    const section = document.getElementById('bestDealsSection');
+                    const grid = document.getElementById('bestDealsGrid');
+                    
+                    section.style.display = 'block';
+                    
+                    grid.innerHTML = data.deals.map(deal => `
+                        <div class="deal-card">
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+                                <div>
+                                    <div style="font-weight: bold; font-size: 1.1rem;">${deal.product_name.substring(0, 40)}...</div>
+                                    <div style="font-size: 0.9rem; color: #666;">${deal.asin}</div>
+                                </div>
+                                <span style="background: #FF416C; color: white; padding: 3px 8px; border-radius: 12px; font-size: 0.8rem;">
+                                    ${deal.region_flag} ${deal.region_code}
+                                </span>
+                            </div>
+                            
+                            <div style="margin: 10px 0;">
+                                <div style="font-size: 1.3rem; font-weight: bold; color: #2E7D32;">
+                                    $${deal.total_cost.toFixed(2)}
+                                </div>
+                                <div style="font-size: 0.9rem; color: #666;">
+                                    أفضل سعر عالمي | ${deal.local_currency} ${deal.local_price.toFixed(2)}
+                                </div>
+                            </div>
+                            
+                            <div style="text-align: center;">
+                                <a href="${deal.product_url}" target="_blank" style="background: #2196F3; color: white; padding: 8px 15px; 
+                                   text-decoration: none; border-radius: 5px; display: inline-block; font-size: 0.9rem;">
+                                    🛒 اشترِ الآن
+                                </a>
+                                <button onclick="compareProductRegions('${deal.asin}')" style="margin-left: 10px; background: #9C27B0; color: white; 
+                                   padding: 8px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 0.9rem;">
+                                    🔄 قارن
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    document.getElementById('bestDealsGrid').innerHTML = `
+                        <div style="text-align: center; padding: 40px; color: #666;">
+                            لا توجد صفقات متاحة حالياً
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error loading best deals:', error);
+            }
+        }
+        
+        async function showComparisonHistory() {
+            if (!selectedProductASIN) {
+                const asin = prompt('Enter product ASIN to view comparison history:');
+                if (!asin) return;
+                selectedProductASIN = asin;
+            }
+            
+            try {
+                const response = await fetch(`/api/product/${selectedProductASIN}/comparison-history?days=7`);
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    const modal = document.getElementById('historyModal');
+                    const content = document.getElementById('historyContent');
+                    
+                    if (data.history.length > 0) {
+                        content.innerHTML = `
+                            <div style="overflow-x: auto;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <thead>
+                                        <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                                            <th style="padding: 12px; text-align: left;">المنطقة</th>
+                                            <th style="padding: 12px; text-align: left;">متوسط السعر</th>
+                                            <th style="padding: 12px; text-align: left;">أقل سعر</th>
+                                            <th style="padding: 12px; text-align: left;">أعلى سعر</th>
+                                            <th style="padding: 12px; text-align: left;">عدد القراءات</th>
+                                            <th style="padding: 12px; text-align: left;">آخر تحديث</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${data.history.map(region => `
+                                            <tr style="border-bottom: 1px solid #eee;">
+                                                <td style="padding: 12px;">
+                                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                                        <span style="font-size: 1.2rem;">${region.region_flag}</span>
+                                                        <div>
+                                                            <div>${region.region_name}</div>
+                                                            <div style="font-size: 0.8rem; color: #666;">${region.region_code}</div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td style="padding: 12px;">
+                                                    <span style="font-weight: bold; color: #2E7D32;">$${region.avg_total_cost.toFixed(2)}</span>
+                                                </td>
+                                                <td style="padding: 12px;">
+                                                    <span style="color: #4CAF50;">$${region.min_total_cost.toFixed(2)}</span>
+                                                </td>
+                                                <td style="padding: 12px;">
+                                                    <span style="color: #F44336;">$${region.max_total_cost.toFixed(2)}</span>
+                                                </td>
+                                                <td style="padding: 12px;">
+                                                    <span style="background: #e0e0e0; padding: 3px 10px; border-radius: 15px; font-size: 0.9rem;">
+                                                        ${region.data_points}
+                                                    </span>
+                                                </td>
+                                                <td style="padding: 12px; font-size: 0.9rem; color: #666;">
+                                                    ${new Date(region.last_checked).toLocaleString()}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                            
+                            <div style="margin-top: 20px; padding: 15px; background: #e8f5e9; border-radius: 8px;">
+                                <strong>📈 تحليل الاتجاه:</strong>
+                                <p style="margin: 10px 0 0 0; color: #333;">
+                                    بناءً على ${data.history.reduce((sum, r) => sum + r.data_points, 0)} قراءة خلال ${data.days_analyzed} أيام
+                                </p>
+                            </div>
+                        `;
+                    } else {
+                        content.innerHTML = `
+                            <div style="text-align: center; padding: 40px;">
+                                <h4 style="color: #666; margin: 0 0 10px 0;">لا توجد بيانات تاريخية</h4>
+                                <p>إبدأ بمقارنة الأسعار لبناء سجل المقارنات</p>
+                            </div>
+                        `;
+                    }
+                    
+                    modal.style.display = 'flex';
+                }
+            } catch (error) {
+                alert('خطأ في تحميل السجل: ' + error.message);
+            }
+        }
+        
+        function closeModal() {
+            document.getElementById('historyModal').style.display = 'none';
+        }
+        
+        function showProfitGuide() {
+            alert(`🚀 دليل الربح من فرق الأسعار بين المناطق
+
+1. اكتشاف فرق السعر:
+   - البرنامج يقارن سعر المنتج في 5 مناطق
+   - يحسب التكلفة الإجمالية (بما فيها الشحن والضرائب)
+   - يحدد المنطقة الأرخص
+
+2. كيفية الربح:
+   - اشتري من المنطقة الأرخص (حتى مع الشحن الدولي)
+   - استخدم روابط الأفلييت في كل منطقة لربح العمولة
+   - نسبة العمولة: 4-10% من سعر المنتج
+
+3. مثال عملي:
+   - iPhone 15 Pro في السعودية: 4,999 ريال (≈ 1,333 دولار)
+   - نفس المنتج في الإمارات: 3,999 درهم (≈ 1,089 دولار)
+   - فرق السعر: 244 دولار (18.3% توفير)
+   - عمولة الأفلييت (5%): 54.45 دولار
+
+4. دخل شهري متوقع:
+   - 10 منتجات مكتشفة يومياً × 30 يوم = 300 منتج
+   - معدل تحويل 2% = 6 عمليات شراء يومياً
+   - متوسط العمولة 20 دولار = 120 دولار يومياً
+   - الدخل الشهري: ≈ 3,600 دولار
+
+5. نصائح:
+   - استخدم خدمات الشحن الموثوقة
+   - تحقق من سياسة الضمان والمرتجعات
+   - راجع تقييمات المنتج في كل منطقة
+   - استغل فروق العملات (اليورو، الجنيه، الخ)`);
         }
     </script>
 </body>
@@ -1826,17 +3068,30 @@ def main():
         print(f"📡 API Endpoints:")
         print(f"   • POST /api/add-product          - Add new product")
         print(f"   • GET  /api/products             - Get all products")
-        print(f"   • GET  /api/product/<asin>/recommendation 🆕 - Get smart recommendation")
+        print(f"   • GET  /api/product/<asin>/recommendation - Get smart recommendation")
+        print(f"   • GET  /api/product/<asin>/compare-regions 🔥 - Compare prices across regions")
+        print(f"   • GET  /api/product/<asin>/comparison-history - Get comparison history")
+        print(f"   • GET  /api/best-region-deals    - Get best cross-region deals")
         print(f"   • GET  /api/regions              - Get supported regions")
         print(f"   • GET  /api/stats                - Get statistics")
         print("=" * 80)
         print("\n🎁 Premium Features:")
         print("  ✅ Multi-Region Support (US, UK, DE, SA, AE)")
         print("  ✅ AI Price Prediction Engine")
-        print("  ✅ 🆕 Smart Buy/Wait/Don't Buy Recommendations")
+        print("  ✅ Smart Buy/Wait/Don't Buy Recommendations")
+        print("  ✅ 🔥 Cross-Region Price Comparison (NEW)")
         print("  ✅ Email Notifications")
         print("  ✅ Real-time Dashboard")
         print("  ✅ Historical Price Analysis")
+        print("  ✅ Export Reports (JSON, CSV, PDF)")
+        print("=" * 80)
+        print("\n🔥 Cross-Region Comparison Features:")
+        print("  • Parallel extraction from all regions")
+        print("  • Smart cost calculation (shipping + taxes)")
+        print("  • Deal scoring system")
+        print("  • Historical comparison tracking")
+        print("  • Best deals discovery")
+        print("  • Profit margin analysis")
         print("=" * 80)
         
         app.run(
